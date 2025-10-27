@@ -36,6 +36,8 @@ function GrowthBook(config as object) as object
         _loadFeaturesFromAPI: GrowthBook__loadFeaturesFromAPI
         _parseFeatures: GrowthBook__parseFeatures
         _evaluateConditions: GrowthBook__evaluateConditions
+        _getAttributeValue: GrowthBook__getAttributeValue
+        _hash: GrowthBook__hash
         _hashAttribute: GrowthBook__hashAttribute
         _trackExperiment: GrowthBook__trackExperiment
         _log: GrowthBook__log
@@ -372,6 +374,34 @@ function GrowthBook_setAttributes(attrs as object) as void
 end function
 
 ' ===================================================================
+' Get attribute value (supports nested paths like "user.age")
+' ===================================================================
+function GrowthBook__getAttributeValue(attr as string) as dynamic
+    ' Check for nested path (e.g., "father.age")
+    if Instr(1, attr, ".") > 0
+        parts = attr.Split(".")
+        value = this.attributes
+        
+        for each part in parts
+            if type(value) = "roAssociativeArray" and value.DoesExist(part)
+                value = value[part]
+            else
+                return invalid
+            end if
+        end for
+        
+        return value
+    end if
+    
+    ' Simple attribute
+    if this.attributes.DoesExist(attr)
+        return this.attributes[attr]
+    end if
+    
+    return invalid
+end function
+
+' ===================================================================
 ' Evaluate conditions (rules) against user attributes
 ' ===================================================================
 function GrowthBook__evaluateConditions(condition as object) as boolean
@@ -383,8 +413,19 @@ function GrowthBook__evaluateConditions(condition as object) as boolean
         return false
     end if
     
+    ' Empty condition always passes
+    if condition.Count() = 0
+        return true
+    end if
+    
     ' Logical operators
-    if condition.$or <> invalid
+    if condition.DoesExist("$or")
+        if type(condition.$or) <> "roArray"
+            return true
+        end if
+        if condition.$or.Count() = 0
+            return true
+        end if
         for each subcond in condition.$or
             if this._evaluateConditions(subcond)
                 return true
@@ -393,7 +434,25 @@ function GrowthBook__evaluateConditions(condition as object) as boolean
         return false
     end if
     
-    if condition.$and <> invalid
+    if condition.DoesExist("$nor")
+        if type(condition.$nor) <> "roArray"
+            return true
+        end if
+        for each subcond in condition.$nor
+            if this._evaluateConditions(subcond)
+                return false
+            end if
+        end for
+        return true
+    end if
+    
+    if condition.DoesExist("$and")
+        if type(condition.$and) <> "roArray"
+            return true
+        end if
+        if condition.$and.Count() = 0
+            return true
+        end if
         for each subcond in condition.$and
             if not this._evaluateConditions(subcond)
                 return false
@@ -402,18 +461,18 @@ function GrowthBook__evaluateConditions(condition as object) as boolean
         return true
     end if
     
-    if condition.$not <> invalid
+    if condition.DoesExist("$not")
         return not this._evaluateConditions(condition.$not)
     end if
     
     ' Attribute conditions
     for each attr in condition
         ' Skip logical operators at this level
-        if attr = "$or" or attr = "$and" or attr = "$not"
+        if attr = "$or" or attr = "$and" or attr = "$not" or attr = "$nor"
             continue for
         end if
         
-        value = this.attributes[attr]
+        value = this._getAttributeValue(attr)
         condition_value = condition[attr]
         
         if type(condition_value) = "roAssociativeArray"
@@ -475,11 +534,108 @@ function GrowthBook__evaluateConditions(condition as object) as boolean
             end if
             if condition_value.$type <> invalid
                 ' Check if actual type matches expected type
-                ' value = invalid is a valid type check
+                expectedType = condition_value.$type
                 actualType = type(value)
-                if actualType <> condition_value.$type
+                
+                ' Map BrightScript types to JSON types
+                jsonType = ""
+                if actualType = "roString" then jsonType = "string"
+                if actualType = "roInteger" or actualType = "roFloat" then jsonType = "number"
+                if actualType = "roBoolean" then jsonType = "boolean"
+                if actualType = "roArray" then jsonType = "array"
+                if actualType = "roAssociativeArray" then jsonType = "object"
+                if actualType = "Invalid" or value = invalid then jsonType = "null"
+                
+                if jsonType <> expectedType
                     return false
                 end if
+            end if
+            if condition_value.$exists <> invalid
+                ' Check if attribute exists
+                shouldExist = CBool(condition_value.$exists)
+                exists = (value <> invalid)
+                if exists <> shouldExist
+                    return false
+                end if
+            end if
+            if condition_value.$regex <> invalid
+                ' Regex matching
+                if value = invalid or type(value) <> "roString"
+                    return false
+                end if
+                ' Use CreateObject("roRegex") for pattern matching
+                regex = CreateObject("roRegex", condition_value.$regex, "i")
+                if regex = invalid or not regex.IsMatch(value)
+                    return false
+                end if
+            end if
+            if condition_value.$elemMatch <> invalid
+                ' Array element matching
+                if value = invalid or type(value) <> "roArray"
+                    return false
+                end if
+                found = false
+                for each item in value
+                    ' Check if this item matches the condition
+                    if type(condition_value.$elemMatch) = "roAssociativeArray"
+                        ' Create temporary GB instance to evaluate nested condition
+                        tempAttrs = { "_item": item }
+                        tempCondition = {}
+                        for each key in condition_value.$elemMatch
+                            tempCondition["_item"] = {}
+                            tempCondition["_item"][key] = condition_value.$elemMatch[key]
+                        end for
+                        ' Simplified check for single value
+                        if this._evaluateConditions(tempCondition)
+                            found = true
+                            exit for
+                        end if
+                    end if
+                end for
+                if not found
+                    return false
+                end if
+            end if
+            if condition_value.$size <> invalid
+                ' Array size check
+                if value = invalid or type(value) <> "roArray"
+                    return false
+                end if
+                expectedSize = condition_value.$size
+                if type(expectedSize) = "roInteger"
+                    if value.Count() <> expectedSize
+                        return false
+                    end if
+                else if type(expectedSize) = "roAssociativeArray"
+                    ' Nested size condition
+                    actualSize = value.Count()
+                    sizeCondition = { "_size": actualSize }
+                    ' Recurse with size as attribute
+                    if not this._evaluateConditions(expectedSize)
+                        return false
+                    end if
+                end if
+            end if
+            if condition_value.$all <> invalid
+                ' All elements must be present
+                if value = invalid or type(value) <> "roArray"
+                    return false
+                end if
+                if type(condition_value.$all) <> "roArray"
+                    return false
+                end if
+                for each required in condition_value.$all
+                    found = false
+                    for each item in value
+                        if item = required
+                            found = true
+                            exit for
+                        end if
+                    end for
+                    if not found
+                        return false
+                    end if
+                end for
             end if
         else
             ' Direct equality
@@ -493,6 +649,43 @@ function GrowthBook__evaluateConditions(condition as object) as boolean
 end function
 
 ' ===================================================================
+' Hash function with seed and version support (for experiments)
+' Returns value between 0 and 1
+' ===================================================================
+function GrowthBook__hash(value as string, version as integer) as float
+    ' Convert value to string if needed
+    if type(value) <> "roString"
+        value = Str(value)
+    end if
+    
+    ' FNV-1a 32-bit hash algorithm
+    prime = 16777619&
+    offsetBasis = 2166136261&
+    
+    ' Initialize hash
+    hash& = offsetBasis
+    
+    ' Process each character
+    for i = 0 to value.Len() - 1
+        charCode = Asc(Mid(value, i + 1, 1))
+        hash& = hash& xor charCode
+        hash& = (hash& * prime) and &hFFFFFFFF& ' 32-bit mask
+    end for
+    
+    ' Convert to float between 0 and 1
+    ' Use modulo to get consistent distribution
+    if version = 2
+        ' Version 2: Different distribution
+        result = (hash& mod 10000) / 10000.0
+    else
+        ' Version 1: Original distribution
+        result = (hash& mod 1000) / 1000.0
+    end if
+    
+    return result
+end function
+
+' ===================================================================
 ' Hash attribute for consistent variation assignment - FNV32a v2
 ' ===================================================================
 function GrowthBook__hashAttribute(value as string) as integer
@@ -500,25 +693,29 @@ function GrowthBook__hashAttribute(value as string) as integer
     ' Matches JS SDK implementation for consistent user bucketing
     ' Used by: https://github.com/growthbook/growthbook/tree/main/packages/sdk-js
     
+    ' Convert to string if needed
+    if type(value) <> "roString"
+        value = Str(value)
+    end if
+    
     ' FNV-1a constants
-    prime = 16777619
-    offsetBasis = 2166136261
+    prime = 16777619&
+    offsetBasis = 2166136261&
     
     ' Initialize hash
-    hash = offsetBasis
+    hash& = offsetBasis
     
     ' Process each character
     for i = 0 to value.Len() - 1
-        charCode = Asc(value.Mid(i, 1))
-        hash = hash xor charCode
+        charCode = Asc(Mid(value, i + 1, 1))
+        hash& = hash& xor charCode
         
         ' Multiply by prime and ensure 32-bit overflow
-        ' In BrightScript, we use mod to simulate 32-bit arithmetic
-        hash = (hash * prime) mod 4294967296
+        hash& = (hash& * prime) and &hFFFFFFFF&
     end for
     
     ' Return 0-99 range for bucket allocation
-    return (hash mod 100)
+    return (hash& mod 100)
 end function
 
 ' ===================================================================
