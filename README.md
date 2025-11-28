@@ -3,18 +3,32 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![BrightScript](https://img.shields.io/badge/BrightScript-2.0-purple.svg)](https://developer.roku.com/docs/references/brightscript/language/brightscript-language-reference.md)
 [![Roku](https://img.shields.io/badge/Roku-SceneGraph-6f3f9f.svg)](https://developer.roku.com/)
+[![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)](CHANGELOG.md)
+[![Production Ready](https://img.shields.io/badge/status-production%20ready-green.svg)](docs/INTEGRATION_GUIDE.md)
 
 Official [GrowthBook](https://www.growthbook.io/) SDK for Roku/BrightScript applications. Add feature flags and A/B testing to your Roku channels with a simple, lightweight SDK.
+
+## ✨ What's New in v1.0.0
+
+**Production-ready release with critical fixes:**
+
+- ✅ **Fixed: Weighted Experiments** - 70/30 splits and custom weight distributions now work correctly
+- ✅ **Fixed: Consistent Hashing** - Users get same variation across sessions (cross-platform compatible)
+- ✅ **New: Version Targeting** - Six new operators (`$vgt`, `$vgte`, `$vlt`, `$vlte`, `$veq`, `$vne`) for semantic version comparisons
+- ✅ **Enterprise Documentation** - Complete integration guide, quick start, and working examples
+
+[View Changelog](CHANGELOG.md) | [Integration Guide](docs/INTEGRATION_GUIDE.md) | [Quick Start](docs/QUICKSTART.md)
 
 ## Features
 
 - 🚀 **Lightweight** - Core SDK is ~50KB, minimal memory footprint
 - ⚡ **Fast** - Feature evaluation in <1ms, optimized for Roku devices
-- 🎯 **Powerful Targeting** - Target users by attributes, conditions, and segments
-- 🧪 **A/B Testing** - Run experiments with configurable traffic allocation
+- 🎯 **Powerful Targeting** - Target users by app version, attributes, and segments
+- 🧪 **A/B Testing** - Run experiments with accurate traffic splits (70/30, 50/25/25, etc.)
+- 🔄 **Consistent Bucketing** - Same user always sees same variation (cross-platform)
 - 📊 **Analytics Ready** - Built-in experiment tracking callbacks
 - 🔒 **Secure** - Support for encrypted feature payloads
-- 🎨 **No Dependencies** - Pure BrightScript, works on all Roku devices
+- 🎨 **No Dependencies** - Pure BrightScript, works on all Roku devices (Roku 3+, OS 9.0+)
 
 ## Quick Start
 
