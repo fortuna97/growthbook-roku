@@ -593,24 +593,54 @@ function GrowthBook__evaluateConditions(condition as object) as boolean
             end if
             if condition_value.$in <> invalid
                 found = false
-                for each v in condition_value.$in
-                    if value = v
-                        found = true
-                        exit for
-                    end if
-                end for
+                ' Check if value is an array (array intersection)
+                if type(value) = "roArray"
+                    ' Array intersection: check if any element in value matches any in $in
+                    for each userVal in value
+                        for each condVal in condition_value.$in
+                            if userVal = condVal
+                                found = true
+                                exit for
+                            end if
+                        end for
+                        if found then exit for
+                    end for
+                else
+                    ' Single value: check if it exists in $in array
+                    for each v in condition_value.$in
+                        if value = v
+                            found = true
+                            exit for
+                        end if
+                    end for
+                end if
                 if not found
                     return false
                 end if
             end if
             if condition_value.$nin <> invalid
                 found = false
-                for each v in condition_value.$nin
-                    if value = v
-                        found = true
-                        exit for
-                    end if
-                end for
+                ' Check if value is an array (array intersection)
+                if type(value) = "roArray"
+                    ' Array intersection: check if any element in value matches any in $nin
+                    for each userVal in value
+                        for each condVal in condition_value.$nin
+                            if userVal = condVal
+                                found = true
+                                exit for
+                            end if
+                        end for
+                        if found then exit for
+                    end for
+                else
+                    ' Single value: check if it exists in $nin array
+                    for each v in condition_value.$nin
+                        if value = v
+                            found = true
+                            exit for
+                        end if
+                    end for
+                end if
                 if found
                     return false
                 end if
