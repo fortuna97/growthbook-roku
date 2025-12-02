@@ -81,6 +81,38 @@ class GrowthBook {
                 if ('$gt' in conditionValue && (value === undefined || !(value > conditionValue.$gt))) return false;
                 if ('$gte' in conditionValue && (value === undefined || !(value >= conditionValue.$gte))) return false;
                 
+                // Version comparison operators
+                if ('$veq' in conditionValue) {
+                    const v1 = this._paddedVersionString(value);
+                    const v2 = this._paddedVersionString(conditionValue.$veq);
+                    if (v1 !== v2) return false;
+                }
+                if ('$vne' in conditionValue) {
+                    const v1 = this._paddedVersionString(value);
+                    const v2 = this._paddedVersionString(conditionValue.$vne);
+                    if (v1 === v2) return false;
+                }
+                if ('$vlt' in conditionValue) {
+                    const v1 = this._paddedVersionString(value);
+                    const v2 = this._paddedVersionString(conditionValue.$vlt);
+                    if (!(v1 < v2)) return false;
+                }
+                if ('$vlte' in conditionValue) {
+                    const v1 = this._paddedVersionString(value);
+                    const v2 = this._paddedVersionString(conditionValue.$vlte);
+                    if (!(v1 <= v2)) return false;
+                }
+                if ('$vgt' in conditionValue) {
+                    const v1 = this._paddedVersionString(value);
+                    const v2 = this._paddedVersionString(conditionValue.$vgt);
+                    if (!(v1 > v2)) return false;
+                }
+                if ('$vgte' in conditionValue) {
+                    const v1 = this._paddedVersionString(value);
+                    const v2 = this._paddedVersionString(conditionValue.$vgte);
+                    if (!(v1 >= v2)) return false;
+                }
+                
                 if ('$in' in conditionValue) {
                     if (!Array.isArray(conditionValue.$in)) return false;
                     if (Array.isArray(value)) {
@@ -205,6 +237,51 @@ class GrowthBook {
         }
         return false;
     }
+
+    // Version string padding for semantic version comparison
+    // Matches BrightScript _paddedVersionString implementation
+    _paddedVersionString(input) {
+        // Convert to string if number
+        if (typeof input === 'number') {
+            input = String(input);
+        }
+        
+        if (!input || typeof input !== 'string') {
+            return '0';
+        }
+        
+        let version = input;
+        
+        // Remove leading "v" if present
+        if (version.startsWith('v') || version.startsWith('V')) {
+            version = version.substring(1);
+        }
+        
+        // Remove build info after "+"
+        const plusPos = version.indexOf('+');
+        if (plusPos > -1) {
+            version = version.substring(0, plusPos);
+        }
+        
+        // Split on "." and "-"
+        const parts = version.split(/[.\-]/);
+        
+        // If exactly 3 parts (SemVer without pre-release), add "~"
+        // This makes "1.0.0" > "1.0.0-beta" since "~" > any letter
+        if (parts.length === 3) {
+            parts.push('~');
+        }
+        
+        // Pad numeric parts with spaces (right-justify to 5 chars)
+        const paddedParts = parts.map(part => {
+            if (/^\d+$/.test(part)) {
+                return part.padStart(5, ' ');
+            }
+            return part;
+        });
+        
+        return paddedParts.join('-');
+    }
 }
 
 // ================================================================
@@ -255,7 +332,7 @@ function runTests(category, tests) {
     console.log('\n');
     console.log(`Results: ${passed} passed, ${failed} failed, ${tests.length - passed - failed} skipped`);
 
-    if (failures.length > 0 && failures.length <= 10) {
+    if (failures.length > 0 && failures.length <= 20) {
         console.log('\n❌ Failures:');
         failures.forEach(f => {
             console.log(`  • ${f.name}`);
