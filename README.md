@@ -3,21 +3,12 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![BrightScript](https://img.shields.io/badge/BrightScript-2.0-purple.svg)](https://developer.roku.com/docs/references/brightscript/language/brightscript-language-reference.md)
 [![Roku](https://img.shields.io/badge/Roku-SceneGraph-6f3f9f.svg)](https://developer.roku.com/)
-[![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.1.0-blue.svg)](CHANGELOG.md)
 [![Production Ready](https://img.shields.io/badge/status-production%20ready-green.svg)](docs/INTEGRATION_GUIDE.md)
 
 Official [GrowthBook](https://www.growthbook.io/) SDK for Roku/BrightScript applications. Add feature flags and A/B testing to your Roku channels with a simple, lightweight SDK.
 
-## ✨ What's New in v1.0.0
-
-**Production-ready release with critical fixes:**
-
-- ✅ **Fixed: Weighted Experiments** - 70/30 splits and custom weight distributions now work correctly
-- ✅ **Fixed: Consistent Hashing** - Users get same variation across sessions (cross-platform compatible)
-- ✅ **New: Version Targeting** - Six new operators (`$vgt`, `$vgte`, `$vlt`, `$vlte`, `$veq`, `$vne`) for semantic version comparisons
-- ✅ **Enterprise Documentation** - Complete integration guide, quick start, and working examples
-
-[View Changelog](CHANGELOG.md) | [Integration Guide](docs/INTEGRATION_GUIDE.md) | [Quick Start](docs/QUICKSTART.md)
+**Current Version:** v1.1.0 — [View Changelog](CHANGELOG.md) | [Integration Guide](docs/INTEGRATION_GUIDE.md) | [Quick Start](docs/QUICKSTART.md)
 
 ## Features
 
@@ -672,6 +663,11 @@ See the `examples/` directory for complete working examples:
 - `simple_flag.brs` - Basic feature flag usage
 - `experiments.brs` - A/B testing with tracking
 - `targeting.brs` - Advanced audience targeting
+- `coverage_rollout.brs` - Progressive feature rollouts
+- `array_targeting.brs` - Tag-based targeting with arrays
+- `version_targeting.brs` - Semantic version targeting
+- `weighted_experiments.brs` - Custom traffic splits
+- `consistent_hashing.brs` - User bucketing consistency
 
 ## Testing
 
