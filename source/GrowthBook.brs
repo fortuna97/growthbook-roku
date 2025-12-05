@@ -912,6 +912,9 @@ end function
 ' Converts weights and coverage into [start, end) ranges
 ' ===================================================================
 function GrowthBook__getBucketRanges(numVariations as integer, coverage as float, weights as object) as object
+    ' Return empty ranges if no variations
+    if numVariations < 1 then return []
+    
     ' Clamp coverage to valid range [0, 1]
     if coverage < 0 then coverage = 0
     if coverage > 1 then coverage = 1
