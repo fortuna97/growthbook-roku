@@ -28,7 +28,7 @@ function Main()
         gb.init()
         
         variant = gb.getFeatureValue("button-test", "control")
-        print "Session " + Str(session) + ": " + variant
+        print "Session " + Str(session).Trim() + ": " + variant
     end for
     
     print ""
@@ -44,7 +44,7 @@ function Main()
     
     ' Show distribution across different users
     for i = 1 to 5
-        testUserId = "user-" + Str(i)
+        testUserId = "user-" + Str(i).Trim()
         
         gb = GrowthBook({
             attributes: { id: testUserId },

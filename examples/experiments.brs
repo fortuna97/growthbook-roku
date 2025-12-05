@@ -20,8 +20,8 @@ function Main()
             ' This callback is called when a user enters an experiment
             print "Experiment Tracked:"
             print "  Experiment: " + experiment.key
-            print "  Variation: " + Str(result.variationId)
-            print "  Value: " + Str(result.value)
+            print "  Variation: " + Str(result.variationId).Trim()
+            print "  Value: " + Str(result.value).Trim()
             
             ' Send to analytics platform
             sendToAnalytics({
@@ -39,11 +39,11 @@ function Main()
     ' This will automatically call the tracking callback
     buttonColorResult = gb.evalFeature("button-color-test")
     
+    buttonColor = "blue"  ' Default fallback
+    
     if buttonColorResult.source = "experiment"
         print "User is in experiment!"
-        print "Assigned variation: " + Str(buttonColorResult.variationId)
-        
-        ' Use the assigned variation value
+        print "Assigned variation: " + Str(buttonColorResult.variationId).Trim()
         buttonColor = buttonColorResult.value
     else if buttonColorResult.source = "defaultValue"
         ' User doesn't qualify for experiment or it's not running

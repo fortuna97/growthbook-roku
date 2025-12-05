@@ -54,7 +54,7 @@ function Main()
     print ""
     print "Rollout Status:"
     print "  Feature: " + result.key
-    print "  In rollout: " + Str(result.on)
+    if result.on then print "  In rollout: true" else print "  In rollout: false"
     print "  Source: " + result.source
     
     ' 4. Multiple rollouts with different coverages

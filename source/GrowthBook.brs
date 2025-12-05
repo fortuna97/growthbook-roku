@@ -134,7 +134,7 @@ function GrowthBook__loadFeaturesFromAPI() as boolean
         this.cachedFeatures = features
         this.lastUpdate = GetTickCount()
         this.isInitialized = true
-        this._log("Features loaded successfully: " + Str(features.Count()) + " features")
+        this._log("Features loaded successfully: " + Str(features.Count()).Trim() + " features")
         return true
     end if
     
@@ -362,11 +362,11 @@ function GrowthBook__evaluateExperiment(rule as object, result as object) as obj
     
     ' Get bucket ranges using coverage and weights
     ranges = this._getBucketRanges(rule.variations.Count(), coverage, weights)
-    this._log("Bucket ranges calculated (coverage=" + Str(coverage) + ")")
+    this._log("Bucket ranges calculated (coverage=" + Str(coverage).Trim() + ")")
     
     ' Choose variation based on hash and bucket ranges
     variationIndex = this._chooseVariation(n, ranges)
-    this._log("Variation selected: " + Str(variationIndex) + " (hash=" + Str(n) + ")")
+    this._log("Variation selected: " + Str(variationIndex).Trim() + " (hash=" + Str(n).Trim() + ")")
     
     ' If no variation found (user outside buckets), return default
     if variationIndex < 0

@@ -49,10 +49,10 @@ function Main()
     ' 3. Target by device type
     if gb.isOn("4k-streaming-enabled")
         print "4K streaming available"
-        player.qualityOptions = ["1080p", "2K", "4K"]
+        print "  Quality options: 1080p, 2K, 4K"
     else
         print "4K streaming disabled"
-        player.qualityOptions = ["720p", "1080p"]
+        print "  Quality options: 720p, 1080p"
     end if
     
     ' 4. Progressive rollout by percentage
@@ -95,7 +95,7 @@ function Main()
     
 end function
 
-function updateUserAttributes(attributes as object)
+function updateUserAttributes(gb as object, attributes as object)
     ' Update attributes at runtime (e.g., after login)
     ' This is useful when user properties change
     gb.setAttributes(attributes)
@@ -116,14 +116,14 @@ end function
 
 function configurePlayer(config as object)
     print "Player configured:"
-    print "  Autoplay: " + Str(config.autoplay)
+    if config.autoplay then print "  Autoplay: true" else print "  Autoplay: false"
     print "  Quality: " + config.quality
     print "  Subtitles: " + config.subtitles
 end function
 
 function getUserId() as string
     ' Get from your app's user data
-    return "user_" + RandInt(10000)
+    return "user_" + Str(RandInt(10000)).Trim()
 end function
 
 function getUserEmail() as string
