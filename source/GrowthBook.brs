@@ -37,8 +37,8 @@ function GrowthBook(config as object) as object
         _parseFeatures: GrowthBook__parseFeatures
         _evaluateConditions: GrowthBook__evaluateConditions
         _getAttributeValue: GrowthBook__getAttributeValue
-        _hash: GrowthBook__hash
-        _hashAttribute: GrowthBook__hashAttribute
+        _fnv1a32: GrowthBook__fnv1a32
+        _gbhash: GrowthBook__gbhash
         _trackExperiment: GrowthBook__trackExperiment
         _log: GrowthBook__log
     }
@@ -309,40 +309,59 @@ function GrowthBook__evaluateExperiment(rule as object, result as object) as obj
         namespace = rule.namespace
     end if
     
-    ' Hash the user for consistent variation assignment
-    userId = this.attributes.id
-    if userId = invalid
-        userId = "anonymous"
+    ' Get hash attribute (default to "id")
+    hashAttribute = "id"
+    if rule.hashAttribute <> invalid and rule.hashAttribute <> ""
+        hashAttribute = rule.hashAttribute
     end if
     
-    ' Calculate bucket
-    bucketKey = userId
-    if namespace <> invalid and type(namespace) = "roAssociativeArray"
-        if namespace.name <> invalid and namespace.value <> invalid
-            bucketKey = userId + "__" + namespace.name + "__" + namespace.value
-        end if
+    ' Get the attribute value to hash
+    hashValue = this._getAttributeValue(hashAttribute)
+    if hashValue = invalid or hashValue = ""
+        hashValue = "anonymous"
     end if
     
-    hash = this._hashAttribute(bucketKey)
+    ' Convert to string if needed
+    if type(hashValue) <> "roString"
+        hashValue = Str(hashValue).Trim()
+    end if
     
-    ' Allocate to variation based on hash
-    weights = []
-    for each variation in rule.variations
-        if type(variation) = "roAssociativeArray" and variation.weights <> invalid
-            weights.Push(variation.weights)
-        else
-            weights.Push(1.0 / rule.variations.Count())
+    ' Get seed (defaults to experiment key or empty string)
+    seed = ""
+    if rule.seed <> invalid and rule.seed <> ""
+        seed = rule.seed
+    else if rule.key <> invalid
+        seed = rule.key
         end if
-    end for
     
-    ' Determine bucket position (0-1)
-    bucket = (hash mod 100) / 100.0
+    ' Get hash version (default to 1)
+    hashVersion = 1
+    if rule.hashVersion <> invalid
+        hashVersion = rule.hashVersion
+    end if
     
-    ' Find variation
+    ' Calculate hash with seed (returns 0-1)
+    n = this._gbhash(seed, hashValue, hashVersion)
+    if n = invalid
+        return result
+    end if
+    
+    ' Get weights from rule level (not from individual variations)
+    weights = rule.weights
+    if weights = invalid or weights.Count() = 0
+        ' Generate equal weights if not provided
+        equalWeight = 1.0 / rule.variations.Count()
+        weights = []
+        for i = 0 to rule.variations.Count() - 1
+            weights.Push(equalWeight)
+        end for
+    end if
+    
+    ' Find variation based on hash and weights
     cumulative = 0
     for i = 0 to rule.variations.Count() - 1
         cumulative = cumulative + weights[i]
-        if bucket <= cumulative
+        if n < cumulative
             result.value = rule.variations[i]
             result.on = CBool(rule.variations[i])
             result.off = not result.on
@@ -508,6 +527,54 @@ function GrowthBook__evaluateConditions(condition as object) as boolean
                     return false
                 end if
             end if
+            if condition_value.$veq <> invalid
+                ' Version equals
+                v1 = this._paddedVersionString(value)
+                v2 = this._paddedVersionString(condition_value.$veq)
+                if v1 <> v2
+                    return false
+                end if
+            end if
+            if condition_value.$vne <> invalid
+                ' Version not equals
+                v1 = this._paddedVersionString(value)
+                v2 = this._paddedVersionString(condition_value.$vne)
+                if v1 = v2
+                    return false
+                end if
+            end if
+            if condition_value.$vlt <> invalid
+                ' Version less than
+                v1 = this._paddedVersionString(value)
+                v2 = this._paddedVersionString(condition_value.$vlt)
+                if not (v1 < v2)
+                    return false
+                end if
+            end if
+            if condition_value.$vlte <> invalid
+                ' Version less than or equal
+                v1 = this._paddedVersionString(value)
+                v2 = this._paddedVersionString(condition_value.$vlte)
+                if not (v1 <= v2)
+                    return false
+                end if
+            end if
+            if condition_value.$vgt <> invalid
+                ' Version greater than
+                v1 = this._paddedVersionString(value)
+                v2 = this._paddedVersionString(condition_value.$vgt)
+                if not (v1 > v2)
+                    return false
+                end if
+            end if
+            if condition_value.$vgte <> invalid
+                ' Version greater than or equal
+                v1 = this._paddedVersionString(value)
+                v2 = this._paddedVersionString(condition_value.$vgte)
+                if not (v1 >= v2)
+                    return false
+                end if
+            end if
             if condition_value.$in <> invalid
                 found = false
                 for each v in condition_value.$in
@@ -649,74 +716,139 @@ function GrowthBook__evaluateConditions(condition as object) as boolean
 end function
 
 ' ===================================================================
-' Hash function with seed and version support (for experiments)
-' Returns value between 0 and 1
+' FNV-1a 32-bit hash algorithm
+' Returns integer hash value
 ' ===================================================================
-function GrowthBook__hash(value as string, version as integer) as float
-    ' Convert value to string if needed
-    if type(value) <> "roString"
-        value = Str(value)
-    end if
-    
-    ' FNV-1a 32-bit hash algorithm
-    prime = 16777619&
-    offsetBasis = 2166136261&
-    
-    ' Initialize hash
-    hash& = offsetBasis
+function GrowthBook__fnv1a32(str as string) as longinteger
+    ' FNV-1a constants
+    hval& = &h811C9DC5&  ' 2166136261 - offset basis
+    prime& = &h01000193&  ' 16777619 - FNV prime
     
     ' Process each character
-    for i = 0 to value.Len() - 1
-        charCode = Asc(Mid(value, i + 1, 1))
-        hash& = hash& xor charCode
-        hash& = (hash& * prime) and &hFFFFFFFF& ' 32-bit mask
+    for i = 0 to str.Len() - 1
+        charCode = Asc(Mid(str, i + 1, 1))
+        hval& = hval& xor charCode
+        hval& = (hval& * prime&) and &hFFFFFFFF&  ' Keep 32-bit
     end for
     
-    ' Convert to float between 0 and 1
-    ' Use modulo to get consistent distribution
-    if version = 2
-        ' Version 2: Different distribution
-        result = (hash& mod 10000) / 10000.0
-    else
-        ' Version 1: Original distribution
-        result = (hash& mod 1000) / 1000.0
+    return hval&
+end function
+
+' ===================================================================
+' GrowthBook hash function with seed and version support
+' Supports v1 and v2 hash algorithms for consistent bucketing
+' Returns value between 0 and 1
+' ===================================================================
+function GrowthBook__gbhash(seed as string, value as string, version as integer) as dynamic
+    ' Convert to string if needed
+    if type(value) <> "roString"
+        value = Str(value).Trim()
     end if
+    if type(seed) <> "roString"
+        seed = ""
+    end if
+    
+    if version = 2
+        ' Version 2: fnv1a32(str(fnv1a32(seed + value)))
+        combined = seed + value
+        hash1& = this._fnv1a32(combined)
+        hash2& = this._fnv1a32(Str(hash1&).Trim())
+        return (hash2& mod 10000) / 10000.0
+    else if version = 1
+        ' Version 1: fnv1a32(value + seed)
+        combined = value + seed
+        hash1& = this._fnv1a32(combined)
+        return (hash1& mod 1000) / 1000.0
+    end if
+    
+    return invalid
+end function
+
+
+' ===================================================================
+' Version string padding for semantic version comparison
+' Enables comparisons like "2.0.0" > "1.9.9" and "1.0.0" > "1.0.0-beta"
+' ===================================================================
+function GrowthBook__paddedVersionString(input as dynamic) as string
+    ' Convert to string if number
+    if type(input) = "roInteger" or type(input) = "roFloat"
+        input = Str(input).Trim()
+    end if
+    
+    if type(input) <> "roString" or input = ""
+        return "0"
+    end if
+    
+    version = input
+    
+    ' Remove leading "v" if present
+    if Left(version, 1) = "v" or Left(version, 1) = "V"
+        version = Mid(version, 2)
+    end if
+    
+    ' Remove build info after "+" (e.g., "1.2.3+build123" -> "1.2.3")
+    plusPos = Instr(1, version, "+")
+    if plusPos > 0
+        version = Left(version, plusPos - 1)
+    end if
+    
+    ' Split on "." and "-"
+    parts = []
+    current = ""
+    
+    for i = 0 to version.Len() - 1
+        char = Mid(version, i + 1, 1)
+        if char = "." or char = "-"
+            if current <> ""
+                parts.Push(current)
+                current = ""
+            end if
+        else
+            current = current + char
+        end if
+    end for
+    
+    if current <> "" then parts.Push(current)
+    
+    ' If exactly 3 parts (SemVer without pre-release), add "~"
+    ' This makes "1.0.0" > "1.0.0-beta" since "~" is largest ASCII char
+    if parts.Count() = 3
+        parts.Push("~")
+    end if
+    
+    ' Pad numeric parts with spaces (right-justify to 5 chars)
+    result = ""
+    for i = 0 to parts.Count() - 1
+        part = parts[i]
+        
+        ' Check if part is numeric
+        isNumeric = true
+        if part.Len() = 0
+            isNumeric = false
+        else
+            for j = 0 to part.Len() - 1
+                charCode = Asc(Mid(part, j + 1, 1))
+                if charCode < 48 or charCode > 57  ' Not 0-9
+                    isNumeric = false
+                    exit for
+                end if
+            end for
+        end if
+        
+        ' Pad numeric parts with spaces
+        if isNumeric
+            while part.Len() < 5
+                part = " " + part
+            end while
+        end if
+        
+        if i > 0 then result = result + "-"
+        result = result + part
+    end for
     
     return result
 end function
 
-' ===================================================================
-' Hash attribute for consistent variation assignment - FNV32a v2
-' ===================================================================
-function GrowthBook__hashAttribute(value as string) as integer
-    ' FNV-1a 32-bit hash algorithm (v2)
-    ' Matches JS SDK implementation for consistent user bucketing
-    ' Used by: https://github.com/growthbook/growthbook/tree/main/packages/sdk-js
-    
-    ' Convert to string if needed
-    if type(value) <> "roString"
-        value = Str(value)
-    end if
-    
-    ' FNV-1a constants
-    prime = 16777619&
-    offsetBasis = 2166136261&
-    
-    ' Initialize hash
-    hash& = offsetBasis
-    
-    ' Process each character
-    for i = 0 to value.Len() - 1
-        charCode = Asc(Mid(value, i + 1, 1))
-        hash& = hash& xor charCode
-        
-        ' Multiply by prime and ensure 32-bit overflow
-        hash& = (hash& * prime) and &hFFFFFFFF&
-    end for
-    
-    ' Return 0-99 range for bucket allocation
-    return (hash& mod 100)
-end function
 
 ' ===================================================================
 ' Track experiment exposure

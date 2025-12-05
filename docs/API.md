@@ -311,6 +311,81 @@ config.features = {
 
 ---
 
+## Targeting and Conditions
+
+GrowthBook supports powerful targeting rules to show features to specific user segments.
+
+### Comparison Operators
+
+#### Numeric Comparisons
+
+| Operator | Meaning | Example |
+|----------|---------|---------|
+| `$eq` | Equal to | `{ "age": { "$eq": 25 } }` |
+| `$ne` | Not equal to | `{ "age": { "$ne": 25 } }` |
+| `$gt` | Greater than | `{ "age": { "$gt": 18 } }` |
+| `$gte` | Greater than or equal | `{ "age": { "$gte": 21 } }` |
+| `$lt` | Less than | `{ "age": { "$lt": 65 } }` |
+| `$lte` | Less than or equal | `{ "age": { "$lte": 64 } }` |
+
+#### Version Comparisons
+
+**New in v1.0.0** - Semantic version comparison operators.
+
+| Operator | Meaning | Example |
+|----------|---------|---------|
+| `$veq` | Version equals | `{ "appVersion": { "$veq": "2.0.0" } }` |
+| `$vne` | Version not equals | `{ "appVersion": { "$vne": "1.0.0" } }` |
+| `$vgt` | Version greater than | `{ "appVersion": { "$vgt": "1.9.0" } }` |
+| `$vgte` | Version greater/equal | `{ "appVersion": { "$vgte": "2.0.0" } }` |
+| `$vlt` | Version less than | `{ "appVersion": { "$vlt": "3.0.0" } }` |
+| `$vlte` | Version less/equal | `{ "appVersion": { "$vlte": "2.9.9" } }` |
+
+**Examples:**
+
+```javascript
+// Roll out to users on v2.0.0 or newer
+{
+  "appVersion": { "$vgte": "2.0.0" }
+}
+
+// Version range
+{
+  "$and": [
+    { "appVersion": { "$vgte": "2.0.0" } },
+    { "appVersion": { "$vlt": "3.0.0" } }
+  ]
+}
+```
+
+**In your code:**
+```brightscript
+attributes: {
+    id: GetDeviceId(),
+    appVersion: "2.1.0"  ' Use semantic versioning
+}
+```
+
+#### Array Operators
+
+| Operator | Meaning | Example |
+|----------|---------|---------|
+| `$in` | Value in array | `{ "country": { "$in": ["US", "CA"] } }` |
+| `$nin` | Value not in array | `{ "country": { "$nin": ["XX"] } }` |
+| `$all` | Array contains all | `{ "tags": { "$all": ["premium"] } }` |
+| `$size` | Array size | `{ "tags": { "$size": 3 } }` |
+
+### Logical Operators
+
+| Operator | Meaning |
+|----------|---------|
+| `$and` | All conditions true |
+| `$or` | At least one true |
+| `$not` | Inverts condition |
+| `$nor` | None can be true |
+
+---
+
 ## Result Objects
 
 ### Evaluation Result
