@@ -2,7 +2,7 @@
 
 All notable changes to the GrowthBook Roku SDK.
 
-## [1.2.0] - 2025-12-09
+## [1.2.0] - 2025-12-11
 
 ### Added
 - **Group operators** - `$inGroup` and `$notInGroup` for saved group targeting
