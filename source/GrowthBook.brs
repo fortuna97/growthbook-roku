@@ -22,6 +22,7 @@ function GrowthBook(config as object) as object
         experiments: {}
         cachedFeatures: {}
         savedGroups: {}
+        _evaluationStack: []
         lastUpdate: 0
         isInitialized: false
         
@@ -251,14 +252,25 @@ function GrowthBook_evalFeature(key as string) as object
         variationId: invalid
     }
     
+    ' Check for cyclic prerequisites
+    for each stackKey in this._evaluationStack
+        if stackKey = key
+            result.source = "cyclicPrerequisite"
+            return result
+        end if
+    end for
+    this._evaluationStack.Push(key)
+    
     if this.features = invalid or this.features.Count() = 0
         result.source = "unknownFeature"
+        this._evaluationStack.Pop()
         return result
     end if
     
     feature = this.features[key]
     if feature = invalid
         result.source = "unknownFeature"
+        this._evaluationStack.Pop()
         return result
     end if
     
@@ -268,6 +280,34 @@ function GrowthBook_evalFeature(key as string) as object
         if feature.rules <> invalid
             for each rule in feature.rules
                 if type(rule) = "roAssociativeArray"
+                    ' Check parent conditions (prerequisites)
+                    if rule.parentConditions <> invalid
+                        for each parent in rule.parentConditions
+                            parentResult = this.evalFeature(parent.id)
+                            ' Propagate cyclic prerequisite
+                            if parentResult.source = "cyclicPrerequisite"
+                                result.source = "cyclicPrerequisite"
+                                this._evaluationStack.Pop()
+                                return result
+                            end if
+                            ' Check gate
+                            if parent.gate = true and not parentResult.on
+                                result.source = "prerequisite"
+                                this._evaluationStack.Pop()
+                                return result
+                            end if
+                            ' Check condition
+                            if parent.condition <> invalid
+                                tempGB = GrowthBook({ attributes: { value: parentResult.value }, savedGroups: this.savedGroups })
+                                if not tempGB._evaluateConditions(parent.condition)
+                                    result.source = "prerequisite"
+                                    this._evaluationStack.Pop()
+                                    return result
+                                end if
+                            end if
+                        end for
+                    end if
+                    
                     if this._evaluateConditions(rule.condition)
                         result.value = rule.value
                         result.on = CBool(rule.value)
@@ -280,6 +320,7 @@ function GrowthBook_evalFeature(key as string) as object
                             result = this._evaluateExperiment(rule, result)
                         end if
                         
+                        this._evaluationStack.Pop()
                         return result
                     end if
                 end if
@@ -292,6 +333,7 @@ function GrowthBook_evalFeature(key as string) as object
             result.on = CBool(feature.defaultValue)
             result.off = not result.on
             result.source = "defaultValue"
+            this._evaluationStack.Pop()
             return result
         end if
     else
@@ -302,6 +344,7 @@ function GrowthBook_evalFeature(key as string) as object
         result.source = "unknownFeature"
     end if
     
+    this._evaluationStack.Pop()
     return result
 end function
 
