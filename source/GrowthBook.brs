@@ -690,20 +690,18 @@ function GrowthBook__evaluateConditions(condition as object) as boolean
                     return false
                 end if
                 found = false
+                ' Create temp instance once outside loop for performance
+                tempGB = GrowthBook({ attributes: {}, savedGroups: this.savedGroups })
                 for each item in value
                     if type(condition_value.$elemMatch) = "roAssociativeArray"
-                        ' Prepare attributes and condition based on item type
+                        ' Update attributes (reuse instance) and prepare condition
                         if type(item) = "roAssociativeArray"
-                            ' For objects: evaluate condition directly against item
-                            itemAttrs = item
+                            tempGB.attributes = item
                             tempCond = condition_value.$elemMatch
                         else
-                            ' For primitives: wrap in "_" attribute
-                            itemAttrs = { "_": item }
+                            tempGB.attributes = { "_": item }
                             tempCond = { "_": condition_value.$elemMatch }
                         end if
-                        ' Evaluate the condition
-                        tempGB = GrowthBook({ attributes: itemAttrs, savedGroups: this.savedGroups })
                         if tempGB._evaluateConditions(tempCond)
                             found = true
                             exit for
