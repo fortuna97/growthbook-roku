@@ -114,21 +114,47 @@ function GrowthBook_init() as boolean
 end function
 
 ' ===================================================================
-' Load features from GrowthBook API
+' Load features from GrowthBook API (async, non-blocking)
 ' ===================================================================
 function GrowthBook__loadFeaturesFromAPI() as boolean
     apiUrl = this.apiHost + "/api/features/" + this.clientKey
     
     this._log("Loading features from: " + apiUrl)
     
+    ' Setup async request with message port
+    port = CreateObject("roMessagePort")
+    this.http.SetMessagePort(port)
     this.http.SetUrl(apiUrl)
-    this.http.SetTimeout(10)
     
-    ' Make the request
-    response = this.http.GetToString()
+    ' Start async request
+    if not this.http.AsyncGetToString()
+        this._log("ERROR: Failed to start async request")
+        return false
+    end if
+    
+    ' Wait for response (10 second timeout)
+    msg = Wait(10000, port)
+    if msg = invalid
+        this._log("ERROR: Request timed out")
+        this.http.AsyncCancel()
+        return false
+    end if
+    
+    ' Handle response
+    if type(msg) = "roUrlEvent"
+        responseCode = msg.GetResponseCode()
+        if responseCode <> 200
+            this._log("ERROR: HTTP " + Str(responseCode).Trim())
+            return false
+        end if
+        response = msg.GetString()
+    else
+        this._log("ERROR: Unexpected response type")
+        return false
+    end if
     
     if response = ""
-        this._log("ERROR: Network request failed")
+        this._log("ERROR: Empty response")
         return false
     end if
     
