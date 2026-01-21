@@ -309,6 +309,22 @@ config.features = {
 }
 ```
 
+### `savedGroups` (object, optional)
+
+**Default:** `{}`
+
+**New in v1.2.0** - Pre-defined user groups for group-based targeting.
+
+```brightscript
+config.savedGroups = {
+    "beta_testers": ["user_001", "user_002", "user_003"],
+    "vip_customers": ["user_100", "user_101"],
+    "employees": ["emp_001", "emp_002"]
+}
+```
+
+Used with `$inGroup` and `$notInGroup` operators (see [Group Operators](#group-operators)).
+
 ---
 
 ## Targeting and Conditions
@@ -407,6 +423,101 @@ attributes: {
 | `$or` | At least one true |
 | `$not` | Inverts condition |
 | `$nor` | None can be true |
+
+### Group Operators
+
+**New in v1.2.0** - Target users based on saved group membership.
+
+| Operator | Meaning | Example |
+|----------|---------|---------|
+| `$inGroup` | User is in saved group | `{ "id": { "$inGroup": "beta_testers" } }` |
+| `$notInGroup` | User is NOT in saved group | `{ "id": { "$notInGroup": "banned_users" } }` |
+
+**Configuration:**
+
+```brightscript
+config = {
+    clientKey: "sdk_YOUR_KEY",
+    attributes: {
+        id: "user_12345"
+    },
+    savedGroups: {
+        "beta_testers": ["user_12345", "user_67890"],
+        "vip_customers": ["user_99999"],
+        "banned_users": ["user_banned_1"]
+    }
+}
+gb = GrowthBook(config)
+```
+
+**Targeting Rules:**
+
+```javascript
+// Target beta testers
+{ "id": { "$inGroup": "beta_testers" } }
+
+// Exclude banned users
+{ "id": { "$notInGroup": "banned_users" } }
+
+// Combine with other conditions
+{
+  "$and": [
+    { "id": { "$inGroup": "beta_testers" } },
+    { "country": { "$in": ["US", "CA"] } }
+  ]
+}
+```
+
+**Behavior:**
+- `$inGroup`: Returns `true` if user's attribute value exists in the saved group array
+- `$notInGroup`: Returns `true` if group doesn't exist OR user is not in the group
+- Group names must match exactly (case-sensitive)
+
+### Element Match Operator
+
+**New in v1.2.0** - Match elements within arrays.
+
+| Operator | Meaning | Example |
+|----------|---------|---------|
+| `$elemMatch` | Array element matches condition | `{ "devices": { "$elemMatch": { "type": "roku" } } }` |
+
+**Primitive Arrays:**
+
+```javascript
+// User attribute
+attributes: {
+    watchHistory: ["movie_001", "movie_002", "series_001"]
+}
+
+// Check if user watched a specific movie
+{ "watchHistory": { "$elemMatch": { "$eq": "movie_001" } } }
+
+// Check for numeric values
+attributes: { scores: [85, 92, 78] }
+{ "scores": { "$elemMatch": { "$gte": 90 } } }  // true (92 >= 90)
+```
+
+**Object Arrays:**
+
+```javascript
+// User attribute
+attributes: {
+    devices: [
+        { type: "roku", model: "ultra", year: 2024 },
+        { type: "mobile", model: "iphone", year: 2023 }
+    ]
+}
+
+// Check for Roku device from 2024+
+{
+  "devices": {
+    "$elemMatch": {
+      "type": "roku",
+      "year": { "$gte": 2024 }
+    }
+  }
+}
+```
 
 ---
 

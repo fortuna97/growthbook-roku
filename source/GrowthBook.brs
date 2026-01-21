@@ -21,6 +21,8 @@ function GrowthBook(config as object) as object
         features: {}
         experiments: {}
         cachedFeatures: {}
+        savedGroups: {}
+        _evaluationStack: []
         lastUpdate: 0
         isInitialized: false
         
@@ -44,6 +46,7 @@ function GrowthBook(config as object) as object
         _getBucketRanges: GrowthBook__getBucketRanges
         _chooseVariation: GrowthBook__chooseVariation
         _inRange: GrowthBook__inRange
+        _deepEqual: GrowthBook__deepEqual
         _trackExperiment: GrowthBook__trackExperiment
         _log: GrowthBook__log
     }
@@ -72,12 +75,15 @@ function GrowthBook(config as object) as object
             instance.cachedFeatures = config.features
             instance.isInitialized = true
         end if
+        if config.savedGroups <> invalid
+            instance.savedGroups = config.savedGroups
+        end if
     end if
     
     ' Configure HTTP transfer
     instance.http.SetCertificatesFile("common:/certs/ca-bundle.crt")
     instance.http.AddHeader("Content-Type", "application/json")
-    instance.http.AddHeader("User-Agent", "GrowthBook-Roku/1.1.0")
+    instance.http.AddHeader("User-Agent", "GrowthBook-Roku/1.2.0")
     
     return instance
 end function
@@ -108,21 +114,47 @@ function GrowthBook_init() as boolean
 end function
 
 ' ===================================================================
-' Load features from GrowthBook API
+' Load features from GrowthBook API (async, non-blocking)
 ' ===================================================================
 function GrowthBook__loadFeaturesFromAPI() as boolean
     apiUrl = this.apiHost + "/api/features/" + this.clientKey
     
     this._log("Loading features from: " + apiUrl)
     
+    ' Setup async request with message port
+    port = CreateObject("roMessagePort")
+    this.http.SetMessagePort(port)
     this.http.SetUrl(apiUrl)
-    this.http.SetTimeout(10)
     
-    ' Make the request
-    response = this.http.GetToString()
+    ' Start async request
+    if not this.http.AsyncGetToString()
+        this._log("ERROR: Failed to start async request")
+        return false
+    end if
+    
+    ' Wait for response (10 second timeout)
+    msg = Wait(10000, port)
+    if msg = invalid
+        this._log("ERROR: Request timed out")
+        this.http.AsyncCancel()
+        return false
+    end if
+    
+    ' Handle response
+    if type(msg) = "roUrlEvent"
+        responseCode = msg.GetResponseCode()
+        if responseCode <> 200
+            this._log("ERROR: HTTP " + Str(responseCode).Trim())
+            return false
+        end if
+        response = msg.GetString()
+    else
+        this._log("ERROR: Unexpected response type")
+        return false
+    end if
     
     if response = ""
-        this._log("ERROR: Network request failed")
+        this._log("ERROR: Empty response")
         return false
     end if
     
@@ -246,14 +278,25 @@ function GrowthBook_evalFeature(key as string) as object
         variationId: invalid
     }
     
+    ' Check for cyclic prerequisites
+    for each stackKey in this._evaluationStack
+        if stackKey = key
+            result.source = "cyclicPrerequisite"
+            return result
+        end if
+    end for
+    this._evaluationStack.Push(key)
+    
     if this.features = invalid or this.features.Count() = 0
         result.source = "unknownFeature"
+        this._evaluationStack.Pop()
         return result
     end if
     
     feature = this.features[key]
     if feature = invalid
         result.source = "unknownFeature"
+        this._evaluationStack.Pop()
         return result
     end if
     
@@ -263,6 +306,34 @@ function GrowthBook_evalFeature(key as string) as object
         if feature.rules <> invalid
             for each rule in feature.rules
                 if type(rule) = "roAssociativeArray"
+                    ' Check parent conditions (prerequisites)
+                    if rule.parentConditions <> invalid
+                        for each parent in rule.parentConditions
+                            parentResult = this.evalFeature(parent.id)
+                            ' Propagate cyclic prerequisite
+                            if parentResult.source = "cyclicPrerequisite"
+                                result.source = "cyclicPrerequisite"
+                                this._evaluationStack.Pop()
+                                return result
+                            end if
+                            ' Check gate
+                            if parent.gate = true and not parentResult.on
+                                result.source = "prerequisite"
+                                this._evaluationStack.Pop()
+                                return result
+                            end if
+                            ' Check condition
+                            if parent.condition <> invalid
+                                tempGB = GrowthBook({ attributes: { value: parentResult.value }, savedGroups: this.savedGroups })
+                                if not tempGB._evaluateConditions(parent.condition)
+                                    result.source = "prerequisite"
+                                    this._evaluationStack.Pop()
+                                    return result
+                                end if
+                            end if
+                        end for
+                    end if
+                    
                     if this._evaluateConditions(rule.condition)
                         result.value = rule.value
                         result.on = CBool(rule.value)
@@ -275,6 +346,7 @@ function GrowthBook_evalFeature(key as string) as object
                             result = this._evaluateExperiment(rule, result)
                         end if
                         
+                        this._evaluationStack.Pop()
                         return result
                     end if
                 end if
@@ -287,6 +359,7 @@ function GrowthBook_evalFeature(key as string) as object
             result.on = CBool(feature.defaultValue)
             result.off = not result.on
             result.source = "defaultValue"
+            this._evaluationStack.Pop()
             return result
         end if
     else
@@ -297,6 +370,7 @@ function GrowthBook_evalFeature(key as string) as object
         result.source = "unknownFeature"
     end if
     
+    this._evaluationStack.Pop()
     return result
 end function
 
@@ -445,59 +519,64 @@ function GrowthBook__evaluateConditions(condition as object) as boolean
         return true
     end if
     
-    ' Logical operators
-    if condition.DoesExist("$or")
-        if type(condition.$or) <> "roArray"
-            return true
-        end if
-        if condition.$or.Count() = 0
-            return true
-        end if
-        for each subcond in condition.$or
-            if this._evaluateConditions(subcond)
-                return true
-            end if
-        end for
-        return false
-    end if
-    
-    if condition.DoesExist("$nor")
-        if type(condition.$nor) <> "roArray"
-            return true
-        end if
-        for each subcond in condition.$nor
-            if this._evaluateConditions(subcond)
-                return false
-            end if
-        end for
-        return true
-    end if
-    
-    if condition.DoesExist("$and")
-        if type(condition.$and) <> "roArray"
-            return true
-        end if
-        if condition.$and.Count() = 0
-            return true
-        end if
-        for each subcond in condition.$and
-            if not this._evaluateConditions(subcond)
-                return false
-            end if
-        end for
-        return true
-    end if
-    
-    if condition.DoesExist("$not")
-        return not this._evaluateConditions(condition.$not)
-    end if
-    
-    ' Attribute conditions
+    ' Process all conditions - ALL must pass (AND logic at top level)
     for each attr in condition
-        ' Skip logical operators at this level
-        if attr = "$or" or attr = "$and" or attr = "$not" or attr = "$nor"
+        ' Handle logical operators
+        if attr = "$or"
+            if type(condition.$or) <> "roArray"
+                continue for
+            end if
+            if condition.$or.Count() = 0
+                continue for
+            end if
+            orPassed = false
+            for each subcond in condition.$or
+                if this._evaluateConditions(subcond)
+                    orPassed = true
+                    exit for
+                end if
+            end for
+            if not orPassed
+                return false
+            end if
             continue for
         end if
+        
+        if attr = "$nor"
+            if type(condition.$nor) <> "roArray"
+                continue for
+            end if
+            for each subcond in condition.$nor
+                if this._evaluateConditions(subcond)
+                    return false
+                end if
+            end for
+            continue for
+        end if
+        
+        if attr = "$and"
+            if type(condition.$and) <> "roArray"
+                continue for
+            end if
+            if condition.$and.Count() = 0
+                continue for
+            end if
+            for each subcond in condition.$and
+                if not this._evaluateConditions(subcond)
+                    return false
+                end if
+            end for
+            continue for
+        end if
+        
+        if attr = "$not"
+            if this._evaluateConditions(condition.$not)
+                return false
+            end if
+            continue for
+        end if
+        
+        ' Handle attribute conditions
         
         value = this._getAttributeValue(attr)
         condition_value = condition[attr]
@@ -680,18 +759,19 @@ function GrowthBook__evaluateConditions(condition as object) as boolean
                     return false
                 end if
                 found = false
+                ' Create temp instance once outside loop for performance
+                tempGB = GrowthBook({ attributes: {}, savedGroups: this.savedGroups })
                 for each item in value
-                    ' Check if this item matches the condition
                     if type(condition_value.$elemMatch) = "roAssociativeArray"
-                        ' Create temporary GB instance to evaluate nested condition
-                        tempAttrs = { "_item": item }
-                        tempCondition = {}
-                        for each key in condition_value.$elemMatch
-                            tempCondition["_item"] = {}
-                            tempCondition["_item"][key] = condition_value.$elemMatch[key]
-                        end for
-                        ' Simplified check for single value
-                        if this._evaluateConditions(tempCondition)
+                        ' Update attributes (reuse instance) and prepare condition
+                        if type(item) = "roAssociativeArray"
+                            tempGB.attributes = item
+                            tempCond = condition_value.$elemMatch
+                        else
+                            tempGB.attributes = { "_": item }
+                            tempCond = { "_": condition_value.$elemMatch }
+                        end if
+                        if tempGB._evaluateConditions(tempCond)
                             found = true
                             exit for
                         end if
@@ -742,9 +822,104 @@ function GrowthBook__evaluateConditions(condition as object) as boolean
                     end if
                 end for
             end if
+            if condition_value.$inGroup <> invalid
+                ' Check if value is in a saved group
+                groupId = condition_value.$inGroup
+                if type(groupId) <> "roString"
+                    return false
+                end if
+                ' Get the saved group
+                if this.savedGroups.DoesExist(groupId)
+                    savedGroup = this.savedGroups[groupId]
+                    if type(savedGroup) = "roArray"
+                        ' Check if value is in the group
+                        found = false
+                        for each groupMember in savedGroup
+                            if value = groupMember
+                                found = true
+                                exit for
+                            end if
+                        end for
+                        if not found
+                            return false
+                        end if
+                    else
+                        return false
+                    end if
+                else
+                    ' Group not found
+                    return false
+                end if
+            end if
+            if condition_value.$notInGroup <> invalid
+                ' Check if value is NOT in a saved group
+                groupId = condition_value.$notInGroup
+                if type(groupId) <> "roString"
+                    return false
+                end if
+                ' Get the saved group
+                if this.savedGroups.DoesExist(groupId)
+                    savedGroup = this.savedGroups[groupId]
+                    if type(savedGroup) = "roArray"
+                        ' Check if value is in the group
+                        found = false
+                        for each groupMember in savedGroup
+                            if value = groupMember
+                                found = true
+                                exit for
+                            end if
+                        end for
+                        if found
+                            return false
+                        end if
+                    else
+                        return false
+                    end if
+                else
+                    ' Group not found - value is not in group, so passes $notInGroup
+                    return true
+                end if
+            end if
+            if condition_value.$not <> invalid
+                ' Negation operator on attribute value
+                tempGB = GrowthBook({ attributes: this.attributes, savedGroups: this.savedGroups })
+                tempCondition = {}
+                tempCondition[attr] = condition_value.$not
+                if tempGB._evaluateConditions(tempCondition)
+                    return false
+                end if
+            end if
+            
+            ' Check for unknown operators (operators starting with $)
+            hasOperator = false
+            for each key in condition_value
+                if Left(key, 1) = "$"
+                    ' Check if it's a known operator
+                    knownOps = ["$eq", "$ne", "$lt", "$lte", "$gt", "$gte", "$veq", "$vne", "$vlt", "$vlte", "$vgt", "$vgte", "$in", "$nin", "$exists", "$type", "$regex", "$elemMatch", "$size", "$all", "$inGroup", "$notInGroup", "$not"]
+                    isKnown = false
+                    for each op in knownOps
+                        if key = op
+                            isKnown = true
+                            exit for
+                        end if
+                    end for
+                    if not isKnown
+                        ' Unknown operator - fail the condition
+                        return false
+                    end if
+                    hasOperator = true
+                end if
+            end for
+            
+            ' If no operators found, treat as direct equality
+            if not hasOperator
+                if not this._deepEqual(value, condition_value)
+                    return false
+                end if
+            end if
         else
             ' Direct equality
-            if value <> condition_value
+            if not this._deepEqual(value, condition_value)
                 return false
             end if
         end if
@@ -975,6 +1150,68 @@ end function
 ' ===================================================================
 function GrowthBook__inRange(n as float, range as object) as boolean
     return n >= range[0] and n < range[1]
+end function
+
+' ===================================================================
+' Deep equality check for values
+' Handles null, primitives, arrays, and objects
+' ===================================================================
+function GrowthBook__deepEqual(val1 as dynamic, val2 as dynamic) as boolean
+    ' Handle null/invalid
+    if val1 = invalid and val2 = invalid
+        return true
+    end if
+    if val1 = invalid or val2 = invalid
+        return false
+    end if
+    
+    ' Type must match
+    type1 = type(val1)
+    type2 = type(val2)
+    if type1 <> type2
+        return false
+    end if
+    
+    ' Primitives
+    if type1 = "roString" or type1 = "roInteger" or type1 = "roFloat" or type1 = "roBoolean" or type1 = "String" or type1 = "Integer" or type1 = "Boolean"
+        return val1 = val2
+    end if
+    
+    ' Arrays
+    if type1 = "roArray"
+        if val1.Count() <> val2.Count()
+            return false
+        end if
+        for i = 0 to val1.Count() - 1
+            if not this._deepEqual(val1[i], val2[i])
+                return false
+            end if
+        end for
+        return true
+    end if
+    
+    ' Objects
+    if type1 = "roAssociativeArray"
+        ' Check if all keys in val1 exist in val2 with same values
+        for each key in val1
+            if not val2.DoesExist(key)
+                return false
+            end if
+            if not this._deepEqual(val1[key], val2[key])
+                return false
+            end if
+        end for
+        ' Check if val2 has any extra keys
+        for each key in val2
+            if not val1.DoesExist(key)
+                return false
+            end if
+        end for
+        return true
+    end if
+    
+    ' Default: use equality
+    return val1 = val2
 end function
 
 ' ===================================================================

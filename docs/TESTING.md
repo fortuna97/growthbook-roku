@@ -4,6 +4,40 @@
 
 The GrowthBook Roku SDK uses **Rooibos**, a professional BrightScript unit testing framework, to test the actual `.brs` code directly on Roku devices or simulators.
 
+For development and quick validation, a **JavaScript validator** is also available to test SDK logic without requiring a Roku device.
+
+---
+
+## JavaScript Validator (Development Tool)
+
+### Quick Start
+
+```bash
+# Run all tests
+npm test
+
+# Or directly
+node tests/validate-logic.js
+```
+
+### Current Results (v1.2.0)
+
+```
+evalCondition:    220/221 (99.5%)
+hash:             15/15  (100%)
+getBucketRange:   13/13  (100%)
+chooseVariation:  13/13  (100%)
+feature:          46/46  (100%)
+──────────────────────────────────
+TOTAL: 307/308 tests passed (99.7%)
+```
+
+The validator (`tests/validate-logic.js`) implements SDK logic in JavaScript and runs it against `cases.json` for rapid development validation.
+
+---
+
+## Rooibos Testing (Production)
+
 ## Test Files
 
 - **GrowthBookTests.brs** - Basic unit tests for core SDK functionality
@@ -478,6 +512,6 @@ When adding new SDK features:
 
 ---
 
-**Last Updated**: October 2025  
+**Last Updated**: December 2025  
 **Rooibos Version**: 5.x  
-**Test Count**: 22 unit tests
+**JavaScript Validator**: 307/308 tests (99.7%)

@@ -1,6 +1,6 @@
 # GrowthBook Roku SDK - Integration Guide
 
-**Version:** 1.1.0  
+**Version:** 1.2.0  
 **Last Updated:** December 2025  
 **Target:** Production deployment
 

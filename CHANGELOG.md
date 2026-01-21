@@ -2,6 +2,30 @@
 
 All notable changes to the GrowthBook Roku SDK.
 
+## [1.2.0] - 2025-12-11
+
+### Added
+- **Group operators** - `$inGroup` and `$notInGroup` for saved group targeting
+  - Target users based on pre-defined group membership (beta testers, VIP users, etc.)
+  - Requires `savedGroups` configuration parameter
+- **savedGroups parameter** - Pass saved groups to SDK for group-based targeting
+- **Deep equality checks** - Proper object comparison for targeting conditions
+- **2 new examples**
+  - `examples/group_targeting.brs` - Demonstrates $inGroup/$notInGroup usage
+  - `examples/complex_conditions.brs` - Advanced targeting with $elemMatch and nested conditions
+
+### Fixed
+- **$elemMatch operator** - Now correctly handles flat arrays and nested object conditions
+- **Unknown operators** - Properly returns false for unrecognized operators (e.g., typos like "$regx")
+- **Logical operators** - Fixed $not and $or edge cases with multiple conditions
+- **Object comparison** - Fixed deep equality for extra/missing property detection
+
+### Improved
+- **Test coverage** - evalCondition: 220/221 (99.5%), up from 204/221 (92.3%)
+- **Code quality** - Simplified $elemMatch implementation, removed duplicate code
+
+---
+
 ## [1.1.0] - 2025-12-04
 
 ### Added
