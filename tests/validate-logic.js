@@ -81,6 +81,38 @@ class GrowthBook {
                 if ('$gt' in conditionValue && (value === undefined || !(value > conditionValue.$gt))) return false;
                 if ('$gte' in conditionValue && (value === undefined || !(value >= conditionValue.$gte))) return false;
                 
+                // Version comparison operators
+                if ('$veq' in conditionValue) {
+                    const v1 = this._paddedVersionString(value);
+                    const v2 = this._paddedVersionString(conditionValue.$veq);
+                    if (v1 !== v2) return false;
+                }
+                if ('$vne' in conditionValue) {
+                    const v1 = this._paddedVersionString(value);
+                    const v2 = this._paddedVersionString(conditionValue.$vne);
+                    if (v1 === v2) return false;
+                }
+                if ('$vlt' in conditionValue) {
+                    const v1 = this._paddedVersionString(value);
+                    const v2 = this._paddedVersionString(conditionValue.$vlt);
+                    if (!(v1 < v2)) return false;
+                }
+                if ('$vlte' in conditionValue) {
+                    const v1 = this._paddedVersionString(value);
+                    const v2 = this._paddedVersionString(conditionValue.$vlte);
+                    if (!(v1 <= v2)) return false;
+                }
+                if ('$vgt' in conditionValue) {
+                    const v1 = this._paddedVersionString(value);
+                    const v2 = this._paddedVersionString(conditionValue.$vgt);
+                    if (!(v1 > v2)) return false;
+                }
+                if ('$vgte' in conditionValue) {
+                    const v1 = this._paddedVersionString(value);
+                    const v2 = this._paddedVersionString(conditionValue.$vgte);
+                    if (!(v1 >= v2)) return false;
+                }
+                
                 if ('$in' in conditionValue) {
                     if (!Array.isArray(conditionValue.$in)) return false;
                     if (Array.isArray(value)) {
@@ -205,6 +237,133 @@ class GrowthBook {
         }
         return false;
     }
+
+    // Version string padding for semantic version comparison
+    // Matches BrightScript _paddedVersionString implementation
+    _paddedVersionString(input) {
+        // Convert to string if number
+        if (typeof input === 'number') {
+            input = String(input);
+        }
+        
+        if (!input || typeof input !== 'string') {
+            return '0';
+        }
+        
+        let version = input;
+        
+        // Remove leading "v" if present
+        if (version.startsWith('v') || version.startsWith('V')) {
+            version = version.substring(1);
+        }
+        
+        // Remove build info after "+"
+        const plusPos = version.indexOf('+');
+        if (plusPos > -1) {
+            version = version.substring(0, plusPos);
+        }
+        
+        // Split on "." and "-"
+        const parts = version.split(/[.\-]/);
+        
+        // If exactly 3 parts (SemVer without pre-release), add "~"
+        // This makes "1.0.0" > "1.0.0-beta" since "~" > any letter
+        if (parts.length === 3) {
+            parts.push('~');
+        }
+        
+        // Pad numeric parts with spaces (right-justify to 5 chars)
+        const paddedParts = parts.map(part => {
+            if (/^\d+$/.test(part)) {
+                return part.padStart(5, ' ');
+            }
+            return part;
+        });
+        
+        return paddedParts.join('-');
+    }
+
+    // FNV-1a 32-bit hash algorithm
+    // Matches BrightScript _fnv1a32 implementation
+    _fnv1a32(str) {
+        let hval = 0x811c9dc5; // 2166136261 - offset basis
+        const prime = 0x01000193; // 16777619 - FNV prime
+        
+        for (let i = 0; i < str.length; i++) {
+            hval ^= str.charCodeAt(i);
+            hval = Math.imul(hval, prime) >>> 0; // Keep 32-bit unsigned
+        }
+        
+        return hval >>> 0; // Ensure unsigned
+    }
+
+    // GrowthBook hash function with seed and version support
+    // Matches BrightScript _gbhash implementation
+    _gbhash(seed, value, version) {
+        // Convert to strings
+        if (typeof value !== 'string') value = String(value);
+        if (typeof seed !== 'string') seed = '';
+        
+        if (version === 2) {
+            // Version 2: fnv1a32(str(fnv1a32(seed + value)))
+            const combined = seed + value;
+            const hash1 = this._fnv1a32(combined);
+            const hash2 = this._fnv1a32(String(hash1));
+            return (hash2 % 10000) / 10000;
+        } else if (version === 1) {
+            // Version 1: fnv1a32(value + seed)
+            const combined = value + seed;
+            const hash1 = this._fnv1a32(combined);
+            return (hash1 % 1000) / 1000;
+        }
+        
+        return null;
+    }
+
+    // Get bucket ranges for variation assignment
+    // Matches BrightScript _getBucketRanges implementation
+    _getBucketRanges(numVariations, coverage = 1, weights = null) {
+        // Clamp coverage
+        if (coverage < 0) coverage = 0;
+        if (coverage > 1) coverage = 1;
+        
+        // Generate equal weights if not provided or invalid
+        if (!weights || weights.length === 0 || weights.length !== numVariations) {
+            weights = Array(numVariations).fill(1 / numVariations);
+        }
+        
+        // Validate weights sum
+        const weightSum = weights.reduce((a, b) => a + b, 0);
+        if (weightSum < 0.99 || weightSum > 1.01) {
+            weights = Array(numVariations).fill(1 / numVariations);
+        }
+        
+        // Build bucket ranges
+        const ranges = [];
+        let cumulative = 0;
+        for (const w of weights) {
+            const start = cumulative;
+            cumulative += w;
+            ranges.push([start, start + coverage * w]);
+        }
+        
+        return ranges;
+    }
+
+    // Choose variation based on hash value and bucket ranges
+    _chooseVariation(n, ranges) {
+        for (let i = 0; i < ranges.length; i++) {
+            if (this._inRange(n, ranges[i])) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    // Check if value is within a bucket range [start, end)
+    _inRange(n, range) {
+        return n >= range[0] && n < range[1];
+    }
 }
 
 // ================================================================
@@ -238,6 +397,68 @@ function runTests(category, tests) {
                     process.stdout.write('✗');
                     failures.push({ name, expected, actual: result });
                 }
+            } else if (category === 'hash') {
+                // Hash tests: [seed, value, version, expected] - no name field
+                const [seed, value, version, expected] = test;
+                const testName = `hash(${seed}, ${value}, v${version})`;
+                const gb = new GrowthBook({});
+                result = gb._gbhash(seed, value, version);
+                
+                // Compare with tolerance for floating point, or both null
+                const isMatch = (result === null && expected === null) ||
+                    (result !== null && expected !== null && Math.abs(result - expected) < 0.001);
+                
+                if (isMatch) {
+                    passed++;
+                    process.stdout.write('✓');
+                } else {
+                    failed++;
+                    process.stdout.write('✗');
+                    failures.push({ name: testName, expected, actual: result });
+                }
+                
+                // Skip the normal name extraction for this category
+                continue;
+            } else if (category === 'getBucketRange') {
+                // getBucketRange tests: [[numVariations, coverage, weights], expectedRanges]
+                const [[numVariations, coverage, weights], expected] = rest;
+                const gb = new GrowthBook({});
+                result = gb._getBucketRanges(numVariations, coverage, weights);
+                
+                // Compare ranges with tolerance
+                let match = result.length === expected.length;
+                if (match) {
+                    for (let i = 0; i < result.length; i++) {
+                        if (Math.abs(result[i][0] - expected[i][0]) > 0.001 ||
+                            Math.abs(result[i][1] - expected[i][1]) > 0.001) {
+                            match = false;
+                            break;
+                        }
+                    }
+                }
+                
+                if (match) {
+                    passed++;
+                    process.stdout.write('✓');
+                } else {
+                    failed++;
+                    process.stdout.write('✗');
+                    failures.push({ name, expected: JSON.stringify(expected), actual: JSON.stringify(result) });
+                }
+            } else if (category === 'chooseVariation') {
+                // chooseVariation tests: [n, ranges, expected]
+                const [n, ranges, expected] = rest;
+                const gb = new GrowthBook({});
+                result = gb._chooseVariation(n, ranges);
+                
+                if (result === expected) {
+                    passed++;
+                    process.stdout.write('✓');
+                } else {
+                    failed++;
+                    process.stdout.write('✗');
+                    failures.push({ name, expected, actual: result });
+                }
             } else {
                 // Skip tests for categories not yet implemented
                 process.stdout.write('○');
@@ -255,7 +476,7 @@ function runTests(category, tests) {
     console.log('\n');
     console.log(`Results: ${passed} passed, ${failed} failed, ${tests.length - passed - failed} skipped`);
 
-    if (failures.length > 0 && failures.length <= 10) {
+    if (failures.length > 0 && failures.length <= 20) {
         console.log('\n❌ Failures:');
         failures.forEach(f => {
             console.log(`  • ${f.name}`);
@@ -276,7 +497,7 @@ function runTests(category, tests) {
 // ================================================================
 
 const results = {};
-const categories = ['evalCondition', 'hash', 'feature'];
+const categories = ['evalCondition', 'hash', 'getBucketRange', 'chooseVariation', 'feature'];
 
 for (const category of categories) {
     if (cases[category]) {

@@ -46,21 +46,21 @@ function Main()
     
     ' Get feature value with fallback
     maxVideos = gb.getFeatureValue("videos-per-row", 4)
-    print "Videos per row: " + Str(maxVideos)
+    print "Videos per row: " + Str(maxVideos).Trim()
     
     ' Get complex feature value
     config = gb.getFeatureValue("player-config", {
         autoplay: false,
         quality: "HD"
     })
-    print "Autoplay: " + Str(config.autoplay)
+    if config.autoplay then print "Autoplay: true" else print "Autoplay: false"
     print "Quality: " + config.quality
     
     ' Get detailed feature evaluation
     result = gb.evalFeature("new-ui")
     print "Feature: " + result.key
-    print "Value: " + Str(result.value)
-    print "Enabled: " + Str(result.on)
+    if result.value then print "Value: true" else print "Value: false"
+    if result.on then print "Enabled: true" else print "Enabled: false"
     print "Source: " + result.source
     
 end function

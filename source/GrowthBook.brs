@@ -39,6 +39,11 @@ function GrowthBook(config as object) as object
         _getAttributeValue: GrowthBook__getAttributeValue
         _fnv1a32: GrowthBook__fnv1a32
         _gbhash: GrowthBook__gbhash
+        _paddedVersionString: GrowthBook__paddedVersionString
+        _isIncludedInRollout: GrowthBook__isIncludedInRollout
+        _getBucketRanges: GrowthBook__getBucketRanges
+        _chooseVariation: GrowthBook__chooseVariation
+        _inRange: GrowthBook__inRange
         _trackExperiment: GrowthBook__trackExperiment
         _log: GrowthBook__log
     }
@@ -72,7 +77,7 @@ function GrowthBook(config as object) as object
     ' Configure HTTP transfer
     instance.http.SetCertificatesFile("common:/certs/ca-bundle.crt")
     instance.http.AddHeader("Content-Type", "application/json")
-    instance.http.AddHeader("User-Agent", "GrowthBook-Roku/1.0.0")
+    instance.http.AddHeader("User-Agent", "GrowthBook-Roku/1.1.0")
     
     return instance
 end function
@@ -129,7 +134,7 @@ function GrowthBook__loadFeaturesFromAPI() as boolean
         this.cachedFeatures = features
         this.lastUpdate = GetTickCount()
         this.isInitialized = true
-        this._log("Features loaded successfully: " + Str(features.Count()) + " features")
+        this._log("Features loaded successfully: " + Str(features.Count()).Trim() + " features")
         return true
     end if
     
@@ -340,44 +345,47 @@ function GrowthBook__evaluateExperiment(rule as object, result as object) as obj
         hashVersion = rule.hashVersion
     end if
     
+    ' Get coverage (defaults to 1.0 = 100%)
+    coverage = 1.0
+    if rule.coverage <> invalid
+        coverage = rule.coverage
+    end if
+    
     ' Calculate hash with seed (returns 0-1)
     n = this._gbhash(seed, hashValue, hashVersion)
     if n = invalid
         return result
     end if
     
-    ' Get weights from rule level (not from individual variations)
+    ' Get weights from rule level
     weights = rule.weights
-    if weights = invalid or weights.Count() = 0
-        ' Generate equal weights if not provided
-        equalWeight = 1.0 / rule.variations.Count()
-        weights = []
-        for i = 0 to rule.variations.Count() - 1
-            weights.Push(equalWeight)
-        end for
+    
+    ' Get bucket ranges using coverage and weights
+    ranges = this._getBucketRanges(rule.variations.Count(), coverage, weights)
+    this._log("Bucket ranges calculated (coverage=" + Str(coverage).Trim() + ")")
+    
+    ' Choose variation based on hash and bucket ranges
+    variationIndex = this._chooseVariation(n, ranges)
+    this._log("Variation selected: " + Str(variationIndex).Trim() + " (hash=" + Str(n).Trim() + ")")
+    
+    ' If no variation found (user outside buckets), return default
+    if variationIndex < 0
+        return result
     end if
     
-    ' Find variation based on hash and weights
-    cumulative = 0
-    for i = 0 to rule.variations.Count() - 1
-        cumulative = cumulative + weights[i]
-        if n < cumulative
-            result.value = rule.variations[i]
-            result.on = CBool(rule.variations[i])
-            result.off = not result.on
-            result.variationId = i
-            result.source = "experiment"
-            
-            if rule.key <> invalid
-                result.experimentId = rule.key
-            end if
-            
-            ' Track the experiment if callback is set
-            this._trackExperiment(rule, result)
-            
-            return result
-        end if
-    end for
+    ' User is assigned to a variation
+    result.value = rule.variations[variationIndex]
+    result.on = CBool(rule.variations[variationIndex])
+    result.off = not result.on
+    result.variationId = variationIndex
+    result.source = "experiment"
+    
+    if rule.key <> invalid
+        result.experimentId = rule.key
+    end if
+    
+    ' Track the experiment if callback is set
+    this._trackExperiment(rule, result)
     
     return result
 end function
@@ -577,24 +585,54 @@ function GrowthBook__evaluateConditions(condition as object) as boolean
             end if
             if condition_value.$in <> invalid
                 found = false
-                for each v in condition_value.$in
-                    if value = v
-                        found = true
-                        exit for
-                    end if
-                end for
+                ' Check if value is an array (array intersection)
+                if type(value) = "roArray"
+                    ' Array intersection: check if any element in value matches any in $in
+                    for each userVal in value
+                        for each condVal in condition_value.$in
+                            if userVal = condVal
+                                found = true
+                                exit for
+                            end if
+                        end for
+                        if found then exit for
+                    end for
+                else
+                    ' Single value: check if it exists in $in array
+                    for each v in condition_value.$in
+                        if value = v
+                            found = true
+                            exit for
+                        end if
+                    end for
+                end if
                 if not found
                     return false
                 end if
             end if
             if condition_value.$nin <> invalid
                 found = false
-                for each v in condition_value.$nin
-                    if value = v
-                        found = true
-                        exit for
-                    end if
-                end for
+                ' Check if value is an array (array intersection)
+                if type(value) = "roArray"
+                    ' Array intersection: check if any element in value matches any in $nin
+                    for each userVal in value
+                        for each condVal in condition_value.$nin
+                            if userVal = condVal
+                                found = true
+                                exit for
+                            end if
+                        end for
+                        if found then exit for
+                    end for
+                else
+                    ' Single value: check if it exists in $nin array
+                    for each v in condition_value.$nin
+                        if value = v
+                            found = true
+                            exit for
+                        end if
+                    end for
+                end if
                 if found
                     return false
                 end if
@@ -849,6 +887,95 @@ function GrowthBook__paddedVersionString(input as dynamic) as string
     return result
 end function
 
+' ===================================================================
+' Check if user is included in rollout based on coverage
+' Used for feature percentage rollouts (force rules with coverage)
+' Note: Experiments use _getBucketRanges instead
+' ===================================================================
+function GrowthBook__isIncludedInRollout(seed as string, hashValue as string, hashVersion as integer, coverage as float) as boolean
+    ' Coverage of 1 or more includes everyone
+    if coverage >= 1.0 then return true
+    
+    ' Coverage of 0 or less excludes everyone
+    if coverage <= 0.0 then return false
+    
+    ' Calculate hash for this user
+    n = this._gbhash(seed, hashValue, hashVersion)
+    if n = invalid then return false
+    
+    ' User is included if their hash is less than coverage
+    return n <= coverage
+end function
+
+' ===================================================================
+' Get bucket ranges for variation assignment
+' Converts weights and coverage into [start, end) ranges
+' ===================================================================
+function GrowthBook__getBucketRanges(numVariations as integer, coverage as float, weights as object) as object
+    ' Return empty ranges if no variations
+    if numVariations < 1 then return []
+    
+    ' Clamp coverage to valid range [0, 1]
+    if coverage < 0 then coverage = 0
+    if coverage > 1 then coverage = 1
+    
+    ' Generate equal weights if not provided or invalid
+    ' Equal weights = each variation gets 1/n of traffic
+    if weights = invalid or weights.Count() = 0 or weights.Count() <> numVariations
+        equalWeight = 1.0 / numVariations
+        weights = []
+        for i = 0 to numVariations - 1
+            weights.Push(equalWeight)
+        end for
+    end if
+    
+    ' Validate weights sum (should be ~1.0)
+    weightSum = 0
+    for each w in weights
+        weightSum = weightSum + w
+    end for
+    if weightSum < 0.99 or weightSum > 1.01
+        equalWeight = 1.0 / numVariations
+        weights = []
+        for i = 0 to numVariations - 1
+            weights.Push(equalWeight)
+        end for
+    end if
+    
+    ' Build bucket ranges as [start, end] arrays
+    ranges = []
+    cumulative = 0.0
+    for each w in weights
+        rangeStart = cumulative
+        cumulative = cumulative + w
+        ' Apply coverage: reduces each bucket by coverage percentage
+        rangeEnd = rangeStart + coverage * w
+        ranges.Push([rangeStart, rangeEnd])
+    end for
+    
+    return ranges
+end function
+
+' ===================================================================
+' Choose variation based on hash value and bucket ranges
+' Returns variation index, or -1 if not in any bucket
+' ===================================================================
+function GrowthBook__chooseVariation(n as float, ranges as object) as integer
+    for i = 0 to ranges.Count() - 1
+        if this._inRange(n, ranges[i])
+            return i
+        end if
+    end for
+    return -1
+end function
+
+' ===================================================================
+' Check if value is within a bucket range [start, end)
+' Range is array: [0] = start, [1] = end
+' ===================================================================
+function GrowthBook__inRange(n as float, range as object) as boolean
+    return n >= range[0] and n < range[1]
+end function
 
 ' ===================================================================
 ' Track experiment exposure

@@ -375,6 +375,30 @@ attributes: {
 | `$all` | Array contains all | `{ "tags": { "$all": ["premium"] } }` |
 | `$size` | Array size | `{ "tags": { "$size": 3 } }` |
 
+**Array Intersection (v1.1.0+):**
+
+When the user attribute is an array, `$in` and `$nin` perform intersection matching:
+
+```javascript
+// User attribute
+attributes: {
+    tags: ["premium", "beta", "early-adopter"]
+}
+
+// Condition: match if ANY tag is in the list
+{ "tags": { "$in": ["beta", "qa"] } }
+// Result: TRUE (user has "beta")
+
+// Condition: exclude if ANY tag matches
+{ "tags": { "$nin": ["banned", "suspended"] } }
+// Result: TRUE (user has neither)
+```
+
+**Use cases:**
+- Tag-based audience targeting
+- Multi-role permission checks
+- Feature access by subscription tiers
+
 ### Logical Operators
 
 | Operator | Meaning |
