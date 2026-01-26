@@ -3,7 +3,7 @@
 ' Parses and executes test cases from cases.json
 ' Validates SDK logic against official GrowthBook specification
 '
-' Requires: TestUtilities.brs (for deepEqual, createGBFromSDKConfig)
+' Requires: TestUtilities.brs (for deepEqual)
 '
 
 ' ================================================================
@@ -58,7 +58,9 @@ function GrowthBookTestRunner_loadCases(filePath as string) as boolean
         return false
     end if
     
-    print "Loaded cases.json (specVersion: " + m.cases.specVersion + ")"
+    specVersion = ""
+    if m.cases.specVersion <> invalid then specVersion = m.cases.specVersion
+    print "Loaded cases.json (specVersion: " + specVersion + ")"
     return true
 end function
 
@@ -216,37 +218,169 @@ function GrowthBookTestRunner_printSummary() as void
 end function
 
 ' ================================================================
-' Category Test Runners (stubs - to be implemented in next commits)
+' Category Test Runners
 ' ================================================================
 
+' evalCondition: [name, condition, attributes, expected, savedGroups?]
 function GrowthBookTestRunner_runEvalConditionTest(test as object) as object
-    ' Test format: [name, condition, attributes, expected, savedGroups?]
-    return { status: "skipped", name: "evalCondition - not yet implemented" }
+    testName = test[0]
+    condition = test[1]
+    attributes = test[2]
+    expected = test[3]
+    savedGroups = invalid
+    if test.Count() > 4 then savedGroups = test[4]
+    
+    ' Create GrowthBook instance
+    config = { attributes: attributes }
+    if savedGroups <> invalid then config.savedGroups = savedGroups
+    gb = GrowthBook(config)
+    
+    ' Run test
+    actual = gb._evaluateConditions(condition)
+    
+    if actual = expected
+        return { status: "passed", name: testName }
+    else
+        return { status: "failed", name: testName, expected: expected, actual: actual }
+    end if
 end function
 
+' hash: [seed, value, version, expected] - NO name field!
 function GrowthBookTestRunner_runHashTest(test as object) as object
-    ' Test format: [seed, value, version, expected]
-    return { status: "skipped", name: "hash - not yet implemented" }
+    seed = test[0]
+    value = test[1]
+    version = test[2]
+    expected = test[3]
+    
+    ' Build test name (value can be string or number)
+    valueStr = ""
+    if type(value) = "roString" or type(value) = "String"
+        valueStr = value
+    else
+        valueStr = Str(value).Trim()
+    end if
+    testName = "hash(" + seed + ", " + valueStr + ", v" + Str(version).Trim() + ")"
+    
+    ' Create GrowthBook instance
+    gb = GrowthBook({})
+    
+    ' Run test
+    actual = gb._gbhash(seed, value, version)
+    
+    ' Compare with tolerance for floating point
+    tolerance = 0.001
+    isMatch = false
+    if actual = invalid and expected = invalid
+        isMatch = true
+    else if actual <> invalid and expected <> invalid
+        if Abs(actual - expected) < tolerance
+            isMatch = true
+        end if
+    end if
+    
+    if isMatch
+        return { status: "passed", name: testName }
+    else
+        return { status: "failed", name: testName, expected: expected, actual: actual }
+    end if
 end function
 
+' getBucketRange: [name, [numVariations, coverage, weights], expectedRanges]
 function GrowthBookTestRunner_runGetBucketRangeTest(test as object) as object
-    ' Test format: [name, [numVariations, coverage, weights], expectedRanges]
-    return { status: "skipped", name: "getBucketRange - not yet implemented" }
+    testName = test[0]
+    params = test[1]
+    expected = test[2]
+    
+    numVariations = params[0]
+    coverage = params[1]
+    weights = invalid
+    if params.Count() > 2 then weights = params[2]
+    
+    ' Create GrowthBook instance
+    gb = GrowthBook({})
+    
+    ' Run test
+    actual = gb._getBucketRanges(numVariations, coverage, weights)
+    
+    ' Compare ranges with tolerance
+    tolerance = 0.001
+    isMatch = (actual.Count() = expected.Count())
+    if isMatch
+        for i = 0 to actual.Count() - 1
+            if Abs(actual[i][0] - expected[i][0]) > tolerance or Abs(actual[i][1] - expected[i][1]) > tolerance
+                isMatch = false
+                exit for
+            end if
+        end for
+    end if
+    
+    if isMatch
+        return { status: "passed", name: testName }
+    else
+        return { status: "failed", name: testName }
+    end if
 end function
 
+' chooseVariation: [name, n, ranges, expected]
 function GrowthBookTestRunner_runChooseVariationTest(test as object) as object
-    ' Test format: [name, n, ranges, expected]
-    return { status: "skipped", name: "chooseVariation - not yet implemented" }
+    testName = test[0]
+    n = test[1]
+    ranges = test[2]
+    expected = test[3]
+    
+    ' Create GrowthBook instance
+    gb = GrowthBook({})
+    
+    ' Run test
+    actual = gb._chooseVariation(n, ranges)
+    
+    if actual = expected
+        return { status: "passed", name: testName }
+    else
+        return { status: "failed", name: testName, expected: expected, actual: actual }
+    end if
 end function
 
+' feature: [name, context, featureKey, expected]
 function GrowthBookTestRunner_runFeatureTest(test as object) as object
-    ' Test format: [name, context, featureKey, expected]
-    return { status: "skipped", name: "feature - not yet implemented" }
+    testName = test[0]
+    context = test[1]
+    featureKey = test[2]
+    expected = test[3]
+    
+    ' Build config from context
+    config = {}
+    if context.attributes <> invalid then config.attributes = context.attributes
+    if context.features <> invalid then config.features = context.features
+    if context.savedGroups <> invalid then config.savedGroups = context.savedGroups
+    if context.forcedVariations <> invalid then config.forcedVariations = context.forcedVariations
+    
+    ' Create GrowthBook instance
+    gb = GrowthBook(config)
+    
+    ' Run test
+    actual = gb.evalFeature(featureKey)
+    
+    ' Compare key fields (use deepEqual for value since it can be object/array)
+    isMatch = true
+    if not deepEqual(actual.value, expected.value) then isMatch = false
+    if actual.on <> expected.on then isMatch = false
+    if actual.off <> expected.off then isMatch = false
+    if actual.source <> expected.source then isMatch = false
+    
+    if isMatch
+        return { status: "passed", name: testName }
+    else
+        return { status: "failed", name: testName }
+    end if
 end function
 
+' run (experiment): [name, context, experiment, value, inExperiment, hashUsed]
 function GrowthBookTestRunner_runExperimentTest(test as object) as object
-    ' Test format: [name, context, experiment, value, inExperiment, hashUsed]
-    return { status: "skipped", name: "run - not yet implemented" }
+    testName = test[0]
+    ' Note: "run" tests evaluate experiments differently
+    ' Skipping for now - feature tests cover most experiment logic
+    return { status: "skipped", name: testName + " (run tests not yet implemented)" }
 end function
 
 ' ================================================================
