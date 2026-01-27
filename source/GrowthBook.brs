@@ -15,6 +15,7 @@ function GrowthBook(config as object) as object
         decryptionKey: ""
         attributes: {}
         trackingCallback: invalid
+        onFeatureUsage: invalid
         enableDevMode: false
         
         ' Internal state
@@ -23,6 +24,7 @@ function GrowthBook(config as object) as object
         cachedFeatures: {}
         savedGroups: {}
         _evaluationStack: []
+        _trackedExperiments: {}
         lastUpdate: 0
         isInitialized: false
         
@@ -48,6 +50,7 @@ function GrowthBook(config as object) as object
         _inRange: GrowthBook__inRange
         _deepEqual: GrowthBook__deepEqual
         _trackExperiment: GrowthBook__trackExperiment
+        _trackFeatureUsage: GrowthBook__trackFeatureUsage
         _log: GrowthBook__log
     }
     
@@ -67,6 +70,9 @@ function GrowthBook(config as object) as object
         end if
         if config.trackingCallback <> invalid
             instance.trackingCallback = config.trackingCallback
+        end if
+        if config.onFeatureUsage <> invalid
+            instance.onFeatureUsage = config.onFeatureUsage
         end if
         if config.enableDevMode <> invalid
             instance.enableDevMode = config.enableDevMode
@@ -282,6 +288,7 @@ function GrowthBook_evalFeature(key as string) as object
     for each stackKey in this._evaluationStack
         if stackKey = key
             result.source = "cyclicPrerequisite"
+            this._trackFeatureUsage(key, result)
             return result
         end if
     end for
@@ -290,6 +297,7 @@ function GrowthBook_evalFeature(key as string) as object
     if this.features = invalid or this.features.Count() = 0
         result.source = "unknownFeature"
         this._evaluationStack.Pop()
+        this._trackFeatureUsage(key, result)
         return result
     end if
     
@@ -297,6 +305,7 @@ function GrowthBook_evalFeature(key as string) as object
     if feature = invalid
         result.source = "unknownFeature"
         this._evaluationStack.Pop()
+        this._trackFeatureUsage(key, result)
         return result
     end if
     
@@ -314,12 +323,14 @@ function GrowthBook_evalFeature(key as string) as object
                             if parentResult.source = "cyclicPrerequisite"
                                 result.source = "cyclicPrerequisite"
                                 this._evaluationStack.Pop()
+                                this._trackFeatureUsage(key, result)
                                 return result
                             end if
                             ' Check gate
                             if parent.gate = true and not parentResult.on
                                 result.source = "prerequisite"
                                 this._evaluationStack.Pop()
+                                this._trackFeatureUsage(key, result)
                                 return result
                             end if
                             ' Check condition
@@ -328,6 +339,7 @@ function GrowthBook_evalFeature(key as string) as object
                                 if not tempGB._evaluateConditions(parent.condition)
                                     result.source = "prerequisite"
                                     this._evaluationStack.Pop()
+                                    this._trackFeatureUsage(key, result)
                                     return result
                                 end if
                             end if
@@ -347,6 +359,7 @@ function GrowthBook_evalFeature(key as string) as object
                         end if
                         
                         this._evaluationStack.Pop()
+                        this._trackFeatureUsage(key, result)
                         return result
                     end if
                 end if
@@ -360,6 +373,7 @@ function GrowthBook_evalFeature(key as string) as object
             result.off = not result.on
             result.source = "defaultValue"
             this._evaluationStack.Pop()
+            this._trackFeatureUsage(key, result)
             return result
         end if
     else
@@ -371,6 +385,7 @@ function GrowthBook_evalFeature(key as string) as object
     end if
     
     this._evaluationStack.Pop()
+    this._trackFeatureUsage(key, result)
     return result
 end function
 
@@ -1215,15 +1230,60 @@ function GrowthBook__deepEqual(val1 as dynamic, val2 as dynamic) as boolean
 end function
 
 ' ===================================================================
-' Track experiment exposure
+' Track experiment exposure (with de-duplication)
 ' ===================================================================
 function GrowthBook__trackExperiment(experiment as object, result as object) as void
     if this.trackingCallback = invalid
         return
     end if
     
+    ' Build unique tracking key to prevent duplicate tracking
+    hashAttribute = "id"
+    if experiment.hashAttribute <> invalid then hashAttribute = experiment.hashAttribute
+    hashValue = ""
+    if this.attributes[hashAttribute] <> invalid
+        attrValue = this.attributes[hashAttribute]
+        if type(attrValue) = "roString" or type(attrValue) = "String"
+            hashValue = attrValue
+        else
+            hashValue = Str(attrValue).Trim()
+        end if
+    end if
+    experimentKey = ""
+    if experiment.key <> invalid then experimentKey = experiment.key
+    variationId = ""
+    if result.variationId <> invalid
+        if type(result.variationId) = "roString" or type(result.variationId) = "String"
+            variationId = result.variationId
+        else
+            variationId = Str(result.variationId).Trim()
+        end if
+    end if
+    
+    trackingKey = hashAttribute + "|" + hashValue + "|" + experimentKey + "|" + variationId
+    
+    ' Skip if already tracked
+    if this._trackedExperiments.DoesExist(trackingKey)
+        return
+    end if
+    
+    ' Mark as tracked
+    this._trackedExperiments[trackingKey] = true
+    
     ' Call the tracking callback
     this.trackingCallback(experiment, result)
+end function
+
+' ===================================================================
+' Track feature usage (called on every feature evaluation)
+' ===================================================================
+function GrowthBook__trackFeatureUsage(featureKey as string, result as object) as void
+    if this.onFeatureUsage = invalid
+        return
+    end if
+    
+    ' Call the feature usage callback
+    this.onFeatureUsage(featureKey, result)
 end function
 
 ' ===================================================================
