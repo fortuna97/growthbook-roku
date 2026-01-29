@@ -285,6 +285,23 @@ end sub
 - `experiment` (object) - Experiment/rule object
 - `result` (object) - Evaluation result
 
+### `onFeatureUsage` (function, optional)
+
+**Default:** `invalid`
+
+**New in v1.3.0** - Callback invoked every time a feature is evaluated.
+
+```brightscript
+config.onFeatureUsage = sub(featureKey, result)
+    ' Track every feature usage
+    print "Feature evaluated: " + featureKey + " = " + Str(result.value)
+end sub
+```
+
+**Callback Parameters:**
+- `featureKey` (string) - The key of the feature being evaluated
+- `result` (object) - Evaluation result object
+
 ### `enableDevMode` (boolean, optional)
 
 **Default:** `false`

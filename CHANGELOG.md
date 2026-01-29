@@ -2,6 +2,24 @@
 
 All notable changes to the GrowthBook Roku SDK.
 
+## [1.3.0] - 2026-01-28
+
+### Added
+- **BrightScript Test Runner** - Native BrightScript test runner that parses and executes `cases.json` directly on device
+- **Tracking Callbacks**
+  - `trackingCallback` - Triggered when a user is exposed to an experiment (includes de-duplication)
+  - `onFeatureUsage` - Triggered for every feature evaluation
+- **Experiment De-duplication** - Prevents duplicate tracking calls for the same experiment/variation/user combination
+- **CI/CD Workflows**
+  - `ci.yml` - Automated testing and syntax checking on PRs
+  - `release.yml` - Automated GitHub releases on version tags
+
+### Improved
+- **Documentation** - Expanded API docs and Integration Guide
+- **Code Organization** - Refactored test suite to use `cases.json` as source of truth
+
+---
+
 ## [1.2.0] - 2025-12-11
 
 ### Added
