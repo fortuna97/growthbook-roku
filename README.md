@@ -692,7 +692,7 @@ npm run lint
 export ROKU_DEV_TARGET=192.168.1.100
 export ROKU_DEV_PASSWORD=your-password
 
-./scripts/deploy.sh
+npm run deploy
 ```
 
 See [TESTING.md](./TESTING.md) for comprehensive testing guide.

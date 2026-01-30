@@ -64,8 +64,6 @@ growthbook-roku/
 │   ├── simple_flag.brs             # Basic usage
 │   ├── experiments.brs             # A/B testing
 │   └── targeting.brs               # Advanced targeting
-├── scripts/
-│   └── deploy.sh                   # Deployment script
 ├── docs/
 │   ├── ARCHITECTURE.md             # This file
 │   └── API.md                      # API reference

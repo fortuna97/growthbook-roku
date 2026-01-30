@@ -58,8 +58,8 @@ npm run lint
 # Check BrightScript compilation syntax
 npm run syntax
 
-# Alternative: Use BrightScript compiler directly
-npm run lint:bsc
+# Alternative: Check syntax compilation directly  
+npm run syntax
 
 # Run specific test file
 node tests/validate-logic.js
