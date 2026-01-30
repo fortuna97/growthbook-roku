@@ -51,7 +51,10 @@ function GrowthBook(config as object) as object
         _trackExperiment: GrowthBook__trackExperiment,
         _trackFeatureUsage: GrowthBook__trackFeatureUsage,
         _log: GrowthBook__log,
-        _hashAttribute: GrowthBook__hashAttribute
+        _hashAttribute: GrowthBook__hashAttribute,
+        
+        ' Helpers (exposed for internal use)
+        toBoolean: GrowthBook_toBoolean
     }
     
     ' Apply config
@@ -408,7 +411,7 @@ function GrowthBook__evaluateExperiment(rule as object, result as object) as obj
     end if
     
     ' Convert to string if needed
-    if type(hashValue) <> "roString"
+    if type(hashValue) <> "roString" and type(hashValue) <> "String"
         hashValue = Str(hashValue).Trim()
     end if
     
@@ -730,9 +733,9 @@ function GrowthBook__evaluateConditions(condition as object) as boolean
                 
                 ' Map BrightScript types to JSON types
                 jsonType = ""
-                if actualType = "roString" then jsonType = "string"
-                if actualType = "roInteger" or actualType = "roFloat" then jsonType = "number"
-                if actualType = "roBoolean" then jsonType = "boolean"
+                if actualType = "roString" or actualType = "String" then jsonType = "string"
+                if actualType = "roInteger" or actualType = "roFloat" or actualType = "Integer" or actualType = "Float" then jsonType = "number"
+                if actualType = "roBoolean" or actualType = "Boolean" then jsonType = "boolean"
                 if actualType = "roArray" then jsonType = "array"
                 if actualType = "roAssociativeArray" then jsonType = "object"
                 if actualType = "Invalid" or value = invalid then jsonType = "null"
@@ -751,7 +754,7 @@ function GrowthBook__evaluateConditions(condition as object) as boolean
             end if
             if condition_value["$regex"] <> invalid
                 ' Regex matching
-                if value = invalid or type(value) <> "roString"
+                if value = invalid or (type(value) <> "roString" and type(value) <> "String")
                     return false
                 end if
                 ' Use CreateObject("roRegex") for pattern matching
@@ -794,7 +797,7 @@ function GrowthBook__evaluateConditions(condition as object) as boolean
                     return false
                 end if
                 expectedSize = condition_value["$size"]
-                if type(expectedSize) = "roInteger"
+                if type(expectedSize) = "roInteger" or type(expectedSize) = "Integer"
                     if value.Count() <> expectedSize
                         return false
                     end if
@@ -831,7 +834,7 @@ function GrowthBook__evaluateConditions(condition as object) as boolean
             if condition_value["$inGroup"] <> invalid
                 ' Check if value is in a saved group
                 groupId = condition_value["$inGroup"]
-                if type(groupId) <> "roString"
+                if type(groupId) <> "roString" and type(groupId) <> "String"
                     return false
                 end if
                 ' Get the saved group
@@ -860,7 +863,7 @@ function GrowthBook__evaluateConditions(condition as object) as boolean
             if condition_value["$notInGroup"] <> invalid
                 ' Check if value is NOT in a saved group
                 groupId = condition_value["$notInGroup"]
-                if type(groupId) <> "roString"
+                if type(groupId) <> "roString" and type(groupId) <> "String"
                     return false
                 end if
                 ' Get the saved group
@@ -963,10 +966,10 @@ end function
 ' ===================================================================
 function GrowthBook__gbhash(seed as string, value as string, version as integer) as dynamic
     ' Convert to string if needed
-    if type(value) <> "roString"
+    if type(value) <> "roString" and type(value) <> "String"
         value = Str(value).Trim()
     end if
-    if type(seed) <> "roString"
+    if type(seed) <> "roString" and type(seed) <> "String"
         seed = ""
     end if
     
@@ -997,7 +1000,7 @@ function GrowthBook__paddedVersionString(input as dynamic) as string
         input = Str(input).Trim()
     end if
     
-    if type(input) <> "roString" or input = ""
+    if (type(input) <> "roString" and type(input) <> "String") or input = ""
         return "0"
     end if
     
@@ -1308,8 +1311,9 @@ function GrowthBook_toBoolean(value as dynamic) as boolean
         return value
     end if
     
-    if type(value) = "roString"
-        return (value.ToLower() = "true" or value = "1")
+    if type(value) = "roString" or type(value) = "String"
+        ' Use LCase() global function instead of method for safety
+        return (LCase(value) = "true" or value = "1")
     end if
     
     if type(value) = "roInteger"

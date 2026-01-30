@@ -18,6 +18,9 @@ All notable changes to the GrowthBook Roku SDK.
 - **Documentation** - Expanded API docs and Integration Guide
 - **Code Organization** - Refactored test suite to use `cases.json` as source of truth
 
+### Fixed
+- **JSON Primitive Parsing** - Fixed crash when parsing boolean strings from primitive types using robust `LCase()` utility
+
 ---
 
 ## [1.2.0] - 2025-12-11

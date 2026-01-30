@@ -10,7 +10,8 @@
     "lint": "npx bslint source/ tests/",
     "syntax": "npx bsc --check-only",
     "validate": "npm test",
-    "deploy": "echo 'Deploy script not configured'"
+    "deploy": "echo 'Deploy script not configured'",
+    "test:channel": "copy source\\GrowthBook.brs test-channel\\source\\"
   },
   "repository": {
     "type": "git",
