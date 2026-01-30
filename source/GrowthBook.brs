@@ -20,7 +20,6 @@ function GrowthBook(config as object) as object
         
         ' Internal state
         features: {}
-        experiments: {}
         cachedFeatures: {}
         savedGroups: {}
         _evaluationStack: []
@@ -89,7 +88,7 @@ function GrowthBook(config as object) as object
     ' Configure HTTP transfer
     instance.http.SetCertificatesFile("common:/certs/ca-bundle.crt")
     instance.http.AddHeader("Content-Type", "application/json")
-    instance.http.AddHeader("User-Agent", "GrowthBook-Roku/1.2.0")
+    instance.http.AddHeader("User-Agent", "GrowthBook-Roku/1.3.0")
     
     return instance
 end function
@@ -190,24 +189,22 @@ function GrowthBook__parseFeatures(json as string) as object
     ' Simple JSON parser for feature response
     ' GrowthBook API returns: { "features": { "key": {...}, ... } }
     
-    try
-        ' Use Roku's built-in JSON parsing if available
-        root = ParseJson(json)
-        
-        if root <> invalid and root.features <> invalid
-            this.features = root.features
-            return root.features
-        end if
-        
-        ' Fallback: assume the response is already features object
-        features = ParseJson(json)
-        if features <> invalid
-            this.features = features
-            return features
-        end if
-    catch err
-        this._log("ERROR: Failed to parse features JSON - " + err.message)
-    end try
+    ' Use Roku's built-in JSON parsing
+    root = ParseJson(json)
+    
+    if root <> invalid and root.features <> invalid
+        this.features = root.features
+        return root.features
+    end if
+    
+    ' Fallback: assume the response is already features object
+    features = ParseJson(json)
+    if features <> invalid
+        this.features = features
+        return features
+    end if
+    
+    this._log("ERROR: Failed to parse features JSON")
     
     return invalid
 end function
@@ -397,12 +394,6 @@ function GrowthBook__evaluateExperiment(rule as object, result as object) as obj
         return result
     end if
     
-    ' Get namespace for experiment isolation
-    namespace = invalid
-    if rule.namespace <> invalid
-        namespace = rule.namespace
-    end if
-    
     ' Get hash attribute (default to "id")
     hashAttribute = "id"
     if rule.hashAttribute <> invalid and rule.hashAttribute <> ""
@@ -426,7 +417,7 @@ function GrowthBook__evaluateExperiment(rule as object, result as object) as obj
         seed = rule.seed
     else if rule.key <> invalid
         seed = rule.key
-        end if
+    end if
     
     ' Get hash version (default to 1)
     hashVersion = 1
