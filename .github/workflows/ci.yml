@@ -26,65 +26,25 @@ jobs:
       - name: Run tests
         run: npm test
 
-  syntax-check:
-    name: BrightScript Syntax Check
+  brightscript-lint:
+    name: Professional BrightScript Linting
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Check BrightScript syntax
-        run: |
-          echo "Checking BrightScript files for basic syntax errors..."
-          
-          errors=0
-          
-          for file in $(find . -name "*.brs" -type f); do
-            echo "Checking $file"
-            
-            # Check for balanced function/end function
-            functions=$(grep -cE "^function|^sub" "$file" 2>/dev/null || echo 0)
-            end_functions=$(grep -cE "^end function|^end sub" "$file" 2>/dev/null || echo 0)
-            
-            if [ "$functions" != "$end_functions" ]; then
-              echo "ERROR: $file has unbalanced function/end function ($functions vs $end_functions)"
-              errors=$((errors + 1))
-            fi
-            
-            # Check for balanced if/end if (multi-line only)
-            # Count 'if' that ends with 'then' on its own line (not single-line if)
-            multiline_ifs=$(grep -cE "^\s*if\s+.*\s+then\s*$" "$file" 2>/dev/null || echo 0)
-            end_ifs=$(grep -c "^\s*end if" "$file" 2>/dev/null || echo 0)
-            
-            if [ "$multiline_ifs" != "$end_ifs" ]; then
-              echo "ERROR: $file has unbalanced if/end if ($multiline_ifs vs $end_ifs)"
-              errors=$((errors + 1))
-            fi
-            
-            # Check for balanced for/end for
-            for_loops=$(grep -cE "^\s*for\s+" "$file" 2>/dev/null || echo 0)
-            end_fors=$(grep -c "^\s*end for" "$file" 2>/dev/null || echo 0)
-            
-            if [ "$for_loops" != "$end_fors" ]; then
-              echo "ERROR: $file has unbalanced for/end for ($for_loops vs $end_fors)"
-              errors=$((errors + 1))
-            fi
-            
-            # Check for balanced while/end while
-            while_loops=$(grep -cE "^\s*while\s+" "$file" 2>/dev/null || echo 0)
-            end_whiles=$(grep -c "^\s*end while" "$file" 2>/dev/null || echo 0)
-            
-            if [ "$while_loops" != "$end_whiles" ]; then
-              echo "ERROR: $file has unbalanced while/end while ($while_loops vs $end_whiles)"
-              errors=$((errors + 1))
-            fi
-          done
-          
-          if [ $errors -gt 0 ]; then
-            echo "Found $errors syntax errors"
-            exit 1
-          fi
-          
-          echo "All BrightScript files passed syntax check"
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm install --ignore-scripts
+
+      - name: Run BrightScript Linter
+        run: npm run lint
+
+      - name: Check BrightScript Syntax
+        run: npm run syntax
 

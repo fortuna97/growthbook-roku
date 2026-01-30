@@ -1,0 +1,24 @@
+{
+  "rootDir": "./",
+  "files": [
+    "source/**/*.brs",
+    "tests/**/*.brs"
+  ],
+  "autoImportComponentScript": true,
+  "createPackage": false,
+  "plugins": [
+    "@rokucommunity/bslint"
+  ],
+  "diagnosticSeverityOverrides": {
+    "BSLINT_1001": "error",
+    "BSLINT_1002": "error",
+    "BSLINT_1003": "error",
+    "BSLINT_1004": "error"
+  },
+  "diagnosticFilters": [
+    {
+      "src": "**/node_modules/**/*",
+      "severity": "off"
+    }
+  ]
+}

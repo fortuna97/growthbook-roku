@@ -1,0 +1,34 @@
+{
+  "extends": "bslint:recommended",
+  "rules": {
+    "block-if-without-end-if": "error",
+    "case-sensitivity": "error", 
+    "consistent-return": "off",
+    "eol-last": "off",
+    "function-no-return": "off",
+    "inline-if-style": "off",
+    "max-line-length": "off",
+    "no-print": "off",
+    "no-todo": "off",
+    "prefer-component-events": "off",
+    "type-annotations": "off",
+    "unreachable-code": "error",
+    "unused-variable": "off",
+    "assign-all-paths": "off"
+  },
+  "globals": [
+    "CreateObject",
+    "ParseJson",
+    "Wait",
+    "Asc",
+    "Chr",
+    "Str",
+    "Left",
+    "Mid",
+    "Right",
+    "Len",
+    "Instr",
+    "CBool",
+    "ReadAsciiFile"
+  ]
+}

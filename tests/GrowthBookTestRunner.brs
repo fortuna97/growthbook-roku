@@ -12,26 +12,26 @@
 function GrowthBookTestRunner() as object
     instance = {
         ' State
-        cases: invalid
-        results: {}
-        totalPassed: 0
-        totalFailed: 0
-        totalSkipped: 0
+        cases: invalid,
+        results: {},
+        totalPassed: 0,
+        totalFailed: 0,
+        totalSkipped: 0,
         
         ' Public Methods
-        loadCases: GrowthBookTestRunner_loadCases
-        runAllTests: GrowthBookTestRunner_runAllTests
-        runCategory: GrowthBookTestRunner_runCategory
-        getResults: GrowthBookTestRunner_getResults
-        printSummary: GrowthBookTestRunner_printSummary
+        loadCases: GrowthBookTestRunner_loadCases,
+        runAllTests: GrowthBookTestRunner_runAllTests,
+        runCategory: GrowthBookTestRunner_runCategory,
+        getResults: GrowthBookTestRunner_getResults,
+        printSummary: GrowthBookTestRunner_printSummary,
         
         ' Private Methods (test runners)
-        _runSingleTest: GrowthBookTestRunner_runSingleTest
-        _runEvalConditionTest: GrowthBookTestRunner_runEvalConditionTest
-        _runHashTest: GrowthBookTestRunner_runHashTest
-        _runGetBucketRangeTest: GrowthBookTestRunner_runGetBucketRangeTest
-        _runChooseVariationTest: GrowthBookTestRunner_runChooseVariationTest
-        _runFeatureTest: GrowthBookTestRunner_runFeatureTest
+        _runSingleTest: GrowthBookTestRunner_runSingleTest,
+        _runEvalConditionTest: GrowthBookTestRunner_runEvalConditionTest,
+        _runHashTest: GrowthBookTestRunner_runHashTest,
+        _runGetBucketRangeTest: GrowthBookTestRunner_runGetBucketRangeTest,
+        _runChooseVariationTest: GrowthBookTestRunner_runChooseVariationTest,
+        _runFeatureTest: GrowthBookTestRunner_runFeatureTest,
         _runExperimentTest: GrowthBookTestRunner_runExperimentTest
     }
     
@@ -120,10 +120,10 @@ function GrowthBookTestRunner_runCategory(category as string) as object
     
     ' Store results
     m.results[category] = {
-        passed: passed
-        failed: failed
-        skipped: skipped
-        total: tests.Count()
+        passed: passed,
+        failed: failed,
+        skipped: skipped,
+        total: tests.Count(),
         failures: failures
     }
     
@@ -181,10 +181,10 @@ end function
 ' ================================================================
 function GrowthBookTestRunner_getResults() as object
     return {
-        categories: m.results
-        totalPassed: m.totalPassed
-        totalFailed: m.totalFailed
-        totalSkipped: m.totalSkipped
+        categories: m.results,
+        totalPassed: m.totalPassed,
+        totalFailed: m.totalFailed,
+        totalSkipped: m.totalSkipped,
         total: m.totalPassed + m.totalFailed + m.totalSkipped
     }
 end function
@@ -192,7 +192,7 @@ end function
 ' ================================================================
 ' Print Summary
 ' ================================================================
-function GrowthBookTestRunner_printSummary() as void
+sub GrowthBookTestRunner_printSummary()
     print ""
     print "================================================================"
     print "TEST SUMMARY"
@@ -215,7 +215,7 @@ function GrowthBookTestRunner_printSummary() as void
     else
         print Str(m.totalFailed).Trim() + " tests failed"
     end if
-end function
+end sub
 
 ' ================================================================
 ' Category Test Runners
