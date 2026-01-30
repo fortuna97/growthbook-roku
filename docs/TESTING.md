@@ -20,7 +20,7 @@ npm test
 node tests/validate-logic.js
 ```
 
-### Current Results (v1.2.0)
+### Current Results (v1.3.0)
 
 ```
 evalCondition:    220/221 (99.5%)

@@ -9,34 +9,34 @@
 ' @SGNode GrowthBookTestSuite
 
 function TestSuite__GrowthBook() as object
-    this = BaseTestSuite()
-    this.Name = "GrowthBookTestSuite"
+    m = BaseTestSuite()
+    m.Name = "GrowthBookTestSuite"
     
     ' Add test cases
-    this.addTest("testInitWithClientKey", testInitWithClientKey)
-    this.addTest("testInitWithFeatures", testInitWithFeatures)
-    this.addTest("testInitWithoutConfig", testInitWithoutConfig)
-    this.addTest("testIsOnEnabled", testIsOnEnabled)
-    this.addTest("testIsOnDisabled", testIsOnDisabled)
-    this.addTest("testIsOnMissing", testIsOnMissing)
-    this.addTest("testGetFeatureValue", testGetFeatureValue)
-    this.addTest("testGetFeatureValueFallback", testGetFeatureValueFallback)
-    this.addTest("testGetFeatureValueNumeric", testGetFeatureValueNumeric)
-    this.addTest("testEvalFeatureStructure", testEvalFeatureStructure)
-    this.addTest("testEvalFeatureDefaultValue", testEvalFeatureDefaultValue)
-    this.addTest("testEvalFeatureUnknown", testEvalFeatureUnknown)
-    this.addTest("testSetAttributes", testSetAttributes)
-    this.addTest("testConditionEquality", testConditionEquality)
-    this.addTest("testConditionGreaterThan", testConditionGreaterThan)
-    this.addTest("testConditionIn", testConditionIn)
-    this.addTest("testConditionOr", testConditionOr)
-    this.addTest("testConditionAnd", testConditionAnd)
-    this.addTest("testConditionNot", testConditionNot)
-    this.addTest("testHashConsistency", testHashConsistency)
-    this.addTest("testHashDifferent", testHashDifferent)
-    this.addTest("testHashRange", testHashRange)
+    m.addTest("testInitWithClientKey", testInitWithClientKey)
+    m.addTest("testInitWithFeatures", testInitWithFeatures)
+    m.addTest("testInitWithoutConfig", testInitWithoutConfig)
+    m.addTest("testIsOnEnabled", testIsOnEnabled)
+    m.addTest("testIsOnDisabled", testIsOnDisabled)
+    m.addTest("testIsOnMissing", testIsOnMissing)
+    m.addTest("testGetFeatureValue", testGetFeatureValue)
+    m.addTest("testGetFeatureValueFallback", testGetFeatureValueFallback)
+    m.addTest("testGetFeatureValueNumeric", testGetFeatureValueNumeric)
+    m.addTest("testEvalFeatureStructure", testEvalFeatureStructure)
+    m.addTest("testEvalFeatureDefaultValue", testEvalFeatureDefaultValue)
+    m.addTest("testEvalFeatureUnknown", testEvalFeatureUnknown)
+    m.addTest("testSetAttributes", testSetAttributes)
+    m.addTest("testConditionEquality", testConditionEquality)
+    m.addTest("testConditionGreaterThan", testConditionGreaterThan)
+    m.addTest("testConditionIn", testConditionIn)
+    m.addTest("testConditionOr", testConditionOr)
+    m.addTest("testConditionAnd", testConditionAnd)
+    m.addTest("testConditionNot", testConditionNot)
+    m.addTest("testHashConsistency", testHashConsistency)
+    m.addTest("testHashDifferent", testHashDifferent)
+    m.addTest("testHashRange", testHashRange)
     
-    return this
+    return m
 end function
 
 ' ================================================================

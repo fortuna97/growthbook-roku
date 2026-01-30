@@ -29,4 +29,8 @@ coverage/
 
 # Roku specific
 out.zip
-manifest.xml
+*.zip
+*.pkg
+
+# Test Channel
+test-channel

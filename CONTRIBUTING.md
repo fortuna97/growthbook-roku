@@ -11,7 +11,9 @@ Please be respectful and constructive in all interactions with other contributor
 ### Prerequisites
 
 - Node.js 14+ (for testing)
-- BrightScript Compiler: `npm install -g @rokucommunity/bsc`
+- BrightScript tools (automatically installed as dev dependencies):
+  - `bslint` - Grammar and best practices validation
+  - `brighterscript` - Advanced BrightScript compiler
 - (Optional) Roku device for integration testing
 
 ### Setup Development Environment
@@ -50,11 +52,17 @@ git checkout -b fix/your-bug-fix-name
 # Run all tests
 npm test
 
-# Run specific test file
-node tests/test_sdk.js
-
-# Validate BrightScript syntax
+# Validate BrightScript grammar & best practices (recommended)
 npm run lint
+
+# Check BrightScript compilation syntax
+npm run syntax
+
+# Alternative: Check syntax compilation directly  
+npm run syntax
+
+# Run specific test file
+node tests/validate-logic.js
 ```
 
 ### 4. Update Documentation

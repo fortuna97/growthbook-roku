@@ -1,14 +1,17 @@
 {
   "name": "growthbook-roku",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Official GrowthBook SDK for Roku/BrightScript applications",
   "main": "source/GrowthBook.brs",
   "scripts": {
     "test": "node tests/validate-logic.js",
     "test:rooibos": "rooibos",
-    "test:coverage": "rooibos --coverage",
-    "lint": "echo 'Install @rokucommunity/bsc to enable linting: npm install -g @rokucommunity/bsc'",
-    "deploy": "./scripts/deploy.sh"
+    "test:coverage": "rooibos --coverage", 
+    "lint": "npx bslint source/ tests/",
+    "syntax": "npx bsc --check-only",
+    "validate": "npm test",
+    "deploy": "echo 'Deploy script not configured'",
+    "test:channel": "copy source\\GrowthBook.brs test-channel\\source\\"
   },
   "repository": {
     "type": "git",
@@ -39,5 +42,9 @@
   "homepage": "https://github.com/growthbook/growthbook-roku#readme",
   "bugs": {
     "url": "https://github.com/growthbook/growthbook-roku/issues"
+  },
+  "devDependencies": {
+    "@rokucommunity/bslint": "^0.8.0",
+    "brighterscript": "^0.65.0"
   }
 }
