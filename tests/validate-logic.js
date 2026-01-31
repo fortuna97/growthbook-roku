@@ -277,7 +277,7 @@ class GrowthBook {
             }
             return value;
         }
-        return this.attributes[attr];
+        return this.attributes[attr] === undefined ? null : this.attributes[attr];
     }
 
     _getType(value) {
