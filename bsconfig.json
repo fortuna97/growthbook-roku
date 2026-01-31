@@ -2,10 +2,11 @@
   "rootDir": "./",
   "files": [
     "source/**/*.brs",
-    "tests/**/*.brs"
+    "tests/**/*.brs",
+    "manifest"
   ],
   "autoImportComponentScript": true,
-  "createPackage": false,
+  "createPackage": true,
   "plugins": [
     "@rokucommunity/bslint"
   ],

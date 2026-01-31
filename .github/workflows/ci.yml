@@ -7,10 +7,34 @@ on:
     branches: [main]
 
 jobs:
+  build:
+    name: Build SDK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm install --ignore-scripts
+
+      - name: Build project
+        run: npm run build
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: growthbook-roku-build
+          path: out/
+
   test:
     name: Validate SDK Logic
+    needs: build
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -27,9 +51,9 @@ jobs:
         run: npm test
 
   brightscript-lint:
-    name: Professional BrightScript Linting
+    name: Lint
+    needs: build
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4

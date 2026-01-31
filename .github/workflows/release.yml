@@ -27,6 +27,15 @@ jobs:
       - name: Run tests before release
         run: npm test
 
+      - name: Build project
+        run: npm run build
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: growthbook-roku-release-${{ github.ref_name }}
+          path: out/
+
       - name: Extract version from tag
         id: version
         run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
