@@ -6,7 +6,7 @@
   "scripts": {
     "test": "node tests/validate-logic.js",
     "test:rooibos": "rooibos",
-    "test:coverage": "rooibos --coverage", 
+    "test:coverage": "rooibos --coverage",
     "lint": "npx bslint source/ tests/",
     "syntax": "npx bsc --check-only",
     "validate": "npm test",
@@ -44,6 +44,7 @@
     "url": "https://github.com/growthbook/growthbook-roku/issues"
   },
   "devDependencies": {
+    "@rokucommunity/brs": "^0.47.4",
     "@rokucommunity/bslint": "^0.8.0",
     "brighterscript": "^0.65.0"
   }

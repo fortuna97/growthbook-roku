@@ -348,20 +348,39 @@ function GrowthBook_evalFeature(key as string) as object
                     end if
                     
                     if m._evaluateConditions(rule.condition)
-                        result.value = rule.value
-                        result.on = GrowthBook_toBoolean(rule.value)
-                        result.off = not result.on
-                        result.ruleId = rule.ruleId
-                        result.source = "force"
-                        
                         ' Handle experiment
                         if rule.variations <> invalid
-                            result = m._evaluateExperiment(rule, result)
+                            expResult = m._evaluateExperiment(rule, result)
+                            if expResult.source = "experiment"
+                                result = expResult
+                                m._evaluationStack.Pop()
+                                m._trackFeatureUsage(key, result)
+                                return result
+                            end if
+                            ' Skipped experiment - continue to next rule
+                        else if rule.force <> invalid
+                            ' Handle force rule
+                            result.value = rule.force
+                            result.on = GrowthBook_toBoolean(rule.force)
+                            result.off = not result.on
+                            result.ruleId = rule.ruleId
+                            result.source = "force"
+                            
+                            m._evaluationStack.Pop()
+                            m._trackFeatureUsage(key, result)
+                            return result
+                        else if rule.value <> invalid
+                            ' Legacy/Fallback for value
+                            result.value = rule.value
+                            result.on = GrowthBook_toBoolean(rule.value)
+                            result.off = not result.on
+                            result.ruleId = rule.ruleId
+                            result.source = "force"
+                            
+                            m._evaluationStack.Pop()
+                            m._trackFeatureUsage(key, result)
+                            return result
                         end if
-                        
-                        m._evaluationStack.Pop()
-                        m._trackFeatureUsage(key, result)
-                        return result
                     end if
                 end if
             end for
@@ -407,7 +426,7 @@ function GrowthBook__evaluateExperiment(rule as object, result as object) as obj
     ' Get the attribute value to hash
     hashValue = m._getAttributeValue(hashAttribute)
     if hashValue = invalid or hashValue = ""
-        hashValue = "anonymous"
+        return result
     end if
     
     ' Convert to string if needed
@@ -490,7 +509,10 @@ end sub
 function GrowthBook__getAttributeValue(attr as string) as dynamic
     ' Check for nested path (e.g., "father.age")
     if Instr(1, attr, ".") > 0
-        parts = attr.Split(".")
+        ' Use roString object to ensure .Split() is available
+        strObj = CreateObject("roString")
+        strObj.SetString(attr)
+        parts = strObj.Split(".")
         value = m.attributes
         
         for each part in parts
@@ -604,23 +626,30 @@ function GrowthBook__evaluateConditions(condition as object) as boolean
                 end if
             end if
             if condition_value["$lt"] <> invalid
-                ' Only compare if value exists
-                if value = invalid or not (value < condition_value["$lt"])
+                compVal = value
+                if compVal = invalid then compVal = 0
+                if not (compVal < condition_value["$lt"])
                     return false
                 end if
             end if
             if condition_value["$lte"] <> invalid
-                if value = invalid or not (value <= condition_value["$lte"])
+                compVal = value
+                if compVal = invalid then compVal = 0
+                if not (compVal <= condition_value["$lte"])
                     return false
                 end if
             end if
             if condition_value["$gt"] <> invalid
-                if value = invalid or not (value > condition_value["$gt"])
+                compVal = value
+                if compVal = invalid then compVal = 0
+                if not (compVal > condition_value["$gt"])
                     return false
                 end if
             end if
             if condition_value["$gte"] <> invalid
-                if value = invalid or not (value >= condition_value["$gte"])
+                compVal = value
+                if compVal = invalid then compVal = 0
+                if not (compVal >= condition_value["$gte"])
                     return false
                 end if
             end if

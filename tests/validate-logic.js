@@ -91,10 +91,10 @@ class GrowthBook {
                 // Operator conditions
                 if ('$eq' in conditionValue && value !== conditionValue.$eq) return false;
                 if ('$ne' in conditionValue && value === conditionValue.$ne) return false;
-                if ('$lt' in conditionValue && (value === undefined || !(value < conditionValue.$lt))) return false;
-                if ('$lte' in conditionValue && (value === undefined || !(value <= conditionValue.$lte))) return false;
-                if ('$gt' in conditionValue && (value === undefined || !(value > conditionValue.$gt))) return false;
-                if ('$gte' in conditionValue && (value === undefined || !(value >= conditionValue.$gte))) return false;
+                if ('$lt' in conditionValue && !(value < conditionValue.$lt)) return false;
+                if ('$lte' in conditionValue && !(value <= conditionValue.$lte)) return false;
+                if ('$gt' in conditionValue && !(value > conditionValue.$gt)) return false;
+                if ('$gte' in conditionValue && !(value >= conditionValue.$gte)) return false;
                 
                 // Version comparison operators
                 if ('$veq' in conditionValue) {
@@ -272,12 +272,13 @@ class GrowthBook {
                 if (value && typeof value === 'object') {
                     value = value[part];
                 } else {
-                    return undefined;
+                    return null;
                 }
             }
-            return value;
+            return value === undefined ? null : value;
         }
-        return this.attributes[attr];
+        const val = this.attributes[attr];
+        return val === undefined ? null : val;
     }
 
     _getType(value) {
@@ -503,7 +504,7 @@ class GrowthBook {
                             if (rule.coverage !== undefined || rule.range || rule.filters || (rule.hashVersion && rule.hashVersion !== 1)) {
                                 const hashAttribute = rule.hashAttribute || 'id';
                                 let hashValue = this._getAttributeValue(hashAttribute);
-                                if (hashValue !== undefined && hashValue !== '') {
+                                if (hashValue !== null && hashValue !== '') {
                                     if (typeof hashValue !== 'string') {
                                         hashValue = String(hashValue);
                                     }
@@ -627,7 +628,7 @@ class GrowthBook {
         let hashValue = this._getAttributeValue(hashAttribute);
         
         // Skip if required hashAttribute is missing
-        if (hashValue === undefined || hashValue === '') {
+        if (hashValue === null || hashValue === '') {
             return result;
         }
         
