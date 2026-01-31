@@ -5,6 +5,7 @@
   "main": "source/GrowthBook.brs",
   "scripts": {
     "test": "node tests/validate-logic.js && npm run test:native",
+    "test:validator": "node tests/validate-logic.js",
     "test:native": "node tests/run-native.js",
     "test:rooibos": "rooibos",
     "test:coverage": "rooibos --coverage",
