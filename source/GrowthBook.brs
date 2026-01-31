@@ -28,7 +28,7 @@ function GrowthBook(config as object) as object
         isInitialized: false,
         
         ' Network utilities
-        http: CreateObject("roURLTransfer"),
+        http: invalid,
         
         ' Methods
         init: GrowthBook_init,
@@ -48,8 +48,10 @@ function GrowthBook(config as object) as object
         _chooseVariation: GrowthBook__chooseVariation,
         _inRange: GrowthBook__inRange,
         _deepEqual: GrowthBook__deepEqual,
+        _compare: GrowthBook__compare,
         _trackExperiment: GrowthBook__trackExperiment,
         _trackFeatureUsage: GrowthBook__trackFeatureUsage,
+        _evaluateExperiment: GrowthBook__evaluateExperiment,
         _log: GrowthBook__log,
         _hashAttribute: GrowthBook__hashAttribute,
         
@@ -90,9 +92,24 @@ function GrowthBook(config as object) as object
     end if
     
     ' Configure HTTP transfer
-    instance.http.SetCertificatesFile("common:/certs/ca-bundle.crt")
-    instance.http.AddHeader("Content-Type", "application/json")
-    instance.http.AddHeader("User-Agent", "GrowthBook-Roku/1.3.0")
+    if config.http <> invalid
+        instance.http = config.http
+    else
+        ' Try to create real roURLTransfer safely
+        ' In some headless environments (like brs), this might throw or fail
+        try
+            instance.http = CreateObject("roURLTransfer")
+        catch e
+            instance.http = invalid
+        end try
+    end if
+    
+    
+    if instance.http <> invalid and type(instance.http) = "roURLTransfer"
+        instance.http.SetCertificatesFile("common:/certs/ca-bundle.crt")
+        instance.http.AddHeader("Content-Type", "application/json")
+        instance.http.AddHeader("User-Agent", "GrowthBook-Roku/1.3.0")
+    end if
     
     return instance
 end function
@@ -310,6 +327,8 @@ function GrowthBook_evalFeature(key as string) as object
         return result
     end if
     
+    result.source = "defaultValue"
+    
     ' Handle feature object
     if type(feature) = "roAssociativeArray"
         ' Check if feature matches targeting rules
@@ -348,20 +367,52 @@ function GrowthBook_evalFeature(key as string) as object
                     end if
                     
                     if m._evaluateConditions(rule.condition)
-                        result.value = rule.value
-                        result.on = GrowthBook_toBoolean(rule.value)
-                        result.off = not result.on
-                        result.ruleId = rule.ruleId
-                        result.source = "force"
-                        
-                        ' Handle experiment
-                        if rule.variations <> invalid
-                            result = m._evaluateExperiment(rule, result)
+                        ' Force rule
+                        if rule.DoesExist("force")
+                            ' Handle coverage for force rules
+                            isIncluded = true
+                            if rule.coverage <> invalid
+                                hashAttribute = "id"
+                                if rule.hashAttribute <> invalid and rule.hashAttribute <> "" then hashAttribute = rule.hashAttribute
+                                
+                                hashValue = m._getAttributeValue(hashAttribute)
+                                
+                                if hashValue = invalid or hashValue = ""
+                                    isIncluded = false
+                                else
+                                    if type(hashValue) <> "roString" and type(hashValue) <> "String"
+                                        hashValue = Str(hashValue).Trim()
+                                    end if
+                                    
+                                    hashVersion = 1
+                                    if rule.hashVersion <> invalid then hashVersion = rule.hashVersion
+                                    
+                                    isIncluded = m._isIncludedInRollout(key, hashValue, hashVersion, rule.coverage)
+                                end if
+                            end if
+                            
+                            if isIncluded
+                                result.value = rule.force
+                                result.on = GrowthBook_toBoolean(rule.force)
+                                result.off = not result.on
+                                result.source = "force"
+                                if rule.id <> invalid then result.ruleId = rule.id
+                                
+                                m._evaluationStack.Pop()
+                                m._trackFeatureUsage(key, result)
+                                return result
+                            end if
                         end if
                         
-                        m._evaluationStack.Pop()
-                        m._trackFeatureUsage(key, result)
-                        return result
+                        ' Experiment rule
+                        if rule.variations <> invalid
+                            result = m._evaluateExperiment(rule, result)
+                            if result.source = "experiment"
+                                m._evaluationStack.Pop()
+                                m._trackFeatureUsage(key, result)
+                                return result
+                            end if
+                        end if
                     end if
                 end if
             end for
@@ -395,6 +446,11 @@ end function
 ' ===================================================================
 function GrowthBook__evaluateExperiment(rule as object, result as object) as object
     if rule.variations = invalid or rule.variations.Count() = 0
+        return result
+    end if
+    
+    ' Experiment MUST have a key
+    if rule.key = invalid and rule.seed = invalid
         return result
     end if
     
@@ -604,25 +660,16 @@ function GrowthBook__evaluateConditions(condition as object) as boolean
                 end if
             end if
             if condition_value["$lt"] <> invalid
-                ' Only compare if value exists
-                if value = invalid or not (value < condition_value["$lt"])
-                    return false
-                end if
+                if not m._compare(value, condition_value["$lt"], "$lt") then return false
             end if
             if condition_value["$lte"] <> invalid
-                if value = invalid or not (value <= condition_value["$lte"])
-                    return false
-                end if
+                if not m._compare(value, condition_value["$lte"], "$lte") then return false
             end if
             if condition_value["$gt"] <> invalid
-                if value = invalid or not (value > condition_value["$gt"])
-                    return false
-                end if
+                if not m._compare(value, condition_value["$gt"], "$gt") then return false
             end if
             if condition_value["$gte"] <> invalid
-                if value = invalid or not (value >= condition_value["$gte"])
-                    return false
-                end if
+                if not m._compare(value, condition_value["$gte"], "$gte") then return false
             end if
             if condition_value["$veq"] <> invalid
                 ' Version equals
@@ -673,6 +720,7 @@ function GrowthBook__evaluateConditions(condition as object) as boolean
                 end if
             end if
             if condition_value["$in"] <> invalid
+                if type(condition_value["$in"]) <> "roArray" then return false
                 found = false
                 ' Check if value is an array (array intersection)
                 if type(value) = "roArray"
@@ -700,6 +748,7 @@ function GrowthBook__evaluateConditions(condition as object) as boolean
                 end if
             end if
             if condition_value["$nin"] <> invalid
+                if type(condition_value["$nin"]) <> "roArray" then return false
                 found = false
                 ' Check if value is an array (array intersection)
                 if type(value) = "roArray"
@@ -770,7 +819,7 @@ function GrowthBook__evaluateConditions(condition as object) as boolean
                 end if
                 found = false
                 ' Create temp instance once outside loop for performance
-                tempGB = GrowthBook({ attributes: {}, savedGroups: m.savedGroups })
+                tempGB = GrowthBook({ attributes: {}, savedGroups: m.savedGroups, http: {} })
                 for each item in value
                     if type(condition_value["$elemMatch"]) = "roAssociativeArray"
                         ' Update attributes (reuse instance) and prepare condition
@@ -792,20 +841,20 @@ function GrowthBook__evaluateConditions(condition as object) as boolean
                 end if
             end if
             if condition_value["$size"] <> invalid
-                ' Array size check
-                if value = invalid or type(value) <> "roArray"
+                if type(value) <> "roArray"
                     return false
                 end if
                 expectedSize = condition_value["$size"]
-                if type(expectedSize) = "roInteger" or type(expectedSize) = "Integer"
-                    if value.Count() <> expectedSize
+                actualSize = value.Count()
+                if type(expectedSize) = "roAssociativeArray"
+                    ' Nested size condition - create temp GB with size as attribute
+                    tempGB = GrowthBook({ attributes: { "_size": actualSize }, http: {} })
+                    if not tempGB._evaluateConditions({ "_size": expectedSize })
                         return false
                     end if
-                else if type(expectedSize) = "roAssociativeArray"
-                    ' Nested size condition - create temp GB with size as attribute
-                    actualSize = value.Count()
-                    tempGB = GrowthBook({ attributes: { "_size": actualSize }, savedGroups: m.savedGroups })
-                    if not tempGB._evaluateConditions(expectedSize)
+                else
+                    ' Direct size comparison
+                    if actualSize <> expectedSize
                         return false
                     end if
                 end if
@@ -891,7 +940,7 @@ function GrowthBook__evaluateConditions(condition as object) as boolean
             end if
             if condition_value["$not"] <> invalid
                 ' Negation operator on attribute value
-                tempGB = GrowthBook({ attributes: m.attributes, savedGroups: m.savedGroups })
+                tempGB = GrowthBook({ attributes: m.attributes, savedGroups: m.savedGroups, http: {} })
                 tempCondition = {}
                 tempCondition[attr] = condition_value["$not"]
                 if tempGB._evaluateConditions(tempCondition)
@@ -1165,6 +1214,36 @@ function GrowthBook__inRange(n as float, range as object) as boolean
 end function
 
 ' ===================================================================
+' Comparison helper with type coercion
+' ===================================================================
+function GrowthBook__compare(v1 as dynamic, v2 as dynamic, op as string) as boolean
+    ' Handle invalid
+    if v1 = invalid then v1 = 0
+    
+    t1 = type(v1)
+    t2 = type(v2)
+    
+    ' Coerce strings to numbers if types differ and one is already a number
+    isNumeric1 = (t1 = "roInteger" or t1 = "Integer" or t1 = "roFloat" or t1 = "Float" or t1 = "Double" or t1 = "LongInteger")
+    isNumeric2 = (t2 = "roInteger" or t2 = "Integer" or t2 = "roFloat" or t2 = "Float" or t2 = "Double" or t2 = "LongInteger")
+    
+    if t1 <> t2
+        if isNumeric1 and (t2 = "roString" or t2 = "String")
+            v2 = Val(v2)
+        else if isNumeric2 and (t1 = "roString" or t1 = "String")
+            v1 = Val(v1)
+        end if
+    end if
+    
+    if op = "$lt" then return v1 < v2
+    if op = "$lte" then return v1 <= v2
+    if op = "$gt" then return v1 > v2
+    if op = "$gte" then return v1 >= v2
+    
+    return false
+end function
+
+' ===================================================================
 ' Deep equality check for values
 ' Handles null, primitives, arrays, and objects
 ' ===================================================================
@@ -1307,20 +1386,21 @@ end function
 ' ===================================================================
 
 function GrowthBook_toBoolean(value as dynamic) as boolean
-    if type(value) = "roBoolean"
+    if type(value) = "roBoolean" or type(value) = "Boolean"
         return value
     end if
     
     if type(value) = "roString" or type(value) = "String"
         ' Use LCase() global function instead of method for safety
-        return (LCase(value) = "true" or value = "1")
+        normalized = LCase(value)
+        return (normalized = "true" or normalized = "1" or normalized = "yes" or normalized = "on")
     end if
     
-    if type(value) = "roInteger"
+    if type(value) = "roInteger" or type(value) = "Integer" or type(value) = "LongInteger"
         return value <> 0
     end if
     
-    if type(value) = "roFloat"
+    if type(value) = "roFloat" or type(value) = "Float" or type(value) = "Double"
         return value <> 0.0
     end if
     
