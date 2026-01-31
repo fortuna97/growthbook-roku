@@ -144,6 +144,10 @@ function GrowthBookTestRunner_runCategory(category as string) as object
         print "  Failures:"
         for each failure in failures
             print "    - " + failure.name
+            if failure.expected <> invalid
+                print "      Expected: " + formatValue(failure.expected)
+                print "      Got     : " + formatValue(failure.actual)
+            end if
         end for
     else if failures.Count() > 5
         print "  " + Str(failures.Count()).Trim() + " failures (showing first 5):"
@@ -224,6 +228,7 @@ end sub
 ' evalCondition: [name, condition, attributes, expected, savedGroups?]
 function GrowthBookTestRunner_runEvalConditionTest(test as object) as object
     testName = test[0]
+    ' print "Running: " + testName
     condition = test[1]
     attributes = test[2]
     expected = test[3]
@@ -231,12 +236,13 @@ function GrowthBookTestRunner_runEvalConditionTest(test as object) as object
     if test.Count() > 4 then savedGroups = test[4]
     
     ' Create GrowthBook instance
-    config = { attributes: attributes }
+    config = { attributes: attributes, http: {} }
     if savedGroups <> invalid then config.savedGroups = savedGroups
     gb = GrowthBook(config)
     
     ' Run test
     actual = gb._evaluateConditions(condition)
+    
     
     if actual = expected
         return { status: "passed", name: testName }
@@ -349,7 +355,7 @@ function GrowthBookTestRunner_runFeatureTest(test as object) as object
     expected = test[3]
     
     ' Build config from context
-    config = {}
+    config = { http: {} }
     if context.attributes <> invalid then config.attributes = context.attributes
     if context.features <> invalid then config.features = context.features
     if context.savedGroups <> invalid then config.savedGroups = context.savedGroups
@@ -357,6 +363,7 @@ function GrowthBookTestRunner_runFeatureTest(test as object) as object
     
     ' Create GrowthBook instance
     gb = GrowthBook(config)
+    gb.init()
     
     ' Run test
     actual = gb.evalFeature(featureKey)
@@ -367,11 +374,12 @@ function GrowthBookTestRunner_runFeatureTest(test as object) as object
     if actual.on <> expected.on then isMatch = false
     if actual.off <> expected.off then isMatch = false
     if actual.source <> expected.source then isMatch = false
+    if expected.ruleId <> invalid and actual.ruleId <> expected.ruleId then isMatch = false
     
     if isMatch
         return { status: "passed", name: testName }
     else
-        return { status: "failed", name: testName }
+        return { status: "failed", name: testName, actual: actual, expected: expected }
     end if
 end function
 
