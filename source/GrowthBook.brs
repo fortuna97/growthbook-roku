@@ -28,7 +28,7 @@ function GrowthBook(config as object) as object
         isInitialized: false,
         
         ' Network utilities
-        http: CreateObject("roURLTransfer"),
+        http: invalid,
         
         ' Methods
         init: GrowthBook_init,
@@ -48,6 +48,7 @@ function GrowthBook(config as object) as object
         _chooseVariation: GrowthBook__chooseVariation,
         _inRange: GrowthBook__inRange,
         _deepEqual: GrowthBook__deepEqual,
+        _compare: GrowthBook__compare,
         _trackExperiment: GrowthBook__trackExperiment,
         _trackFeatureUsage: GrowthBook__trackFeatureUsage,
         _log: GrowthBook__log,
@@ -90,9 +91,22 @@ function GrowthBook(config as object) as object
     end if
     
     ' Configure HTTP transfer
-    instance.http.SetCertificatesFile("common:/certs/ca-bundle.crt")
-    instance.http.AddHeader("Content-Type", "application/json")
-    instance.http.AddHeader("User-Agent", "GrowthBook-Roku/1.3.0")
+    ' Note: In headless test environments (like brs), roURLTransfer may not be available
+    ' The SDK should still work for logic testing even without HTTP capabilities
+    if config.http <> invalid
+        instance.http = config.http
+    else
+        ' Create HTTP object for real device usage
+        ' On test environments, this may remain invalid - that's OK
+        instance.http = CreateObject("roURLTransfer")
+    end if
+    
+    ' Only configure HTTP if object was created successfully
+    if instance.http <> invalid and type(instance.http) = "roURLTransfer"
+        instance.http.SetCertificatesFile("common:/certs/ca-bundle.crt")
+        instance.http.AddHeader("Content-Type", "application/json")
+        instance.http.AddHeader("User-Agent", "GrowthBook-Roku/1.3.0")
+    end if
     
     return instance
 end function
@@ -626,32 +640,16 @@ function GrowthBook__evaluateConditions(condition as object) as boolean
                 end if
             end if
             if condition_value["$lt"] <> invalid
-                compVal = value
-                if compVal = invalid then compVal = 0
-                if not (compVal < condition_value["$lt"])
-                    return false
-                end if
+                if not m._compare(value, condition_value["$lt"], "$lt") then return false
             end if
             if condition_value["$lte"] <> invalid
-                compVal = value
-                if compVal = invalid then compVal = 0
-                if not (compVal <= condition_value["$lte"])
-                    return false
-                end if
+                if not m._compare(value, condition_value["$lte"], "$lte") then return false
             end if
             if condition_value["$gt"] <> invalid
-                compVal = value
-                if compVal = invalid then compVal = 0
-                if not (compVal > condition_value["$gt"])
-                    return false
-                end if
+                if not m._compare(value, condition_value["$gt"], "$gt") then return false
             end if
             if condition_value["$gte"] <> invalid
-                compVal = value
-                if compVal = invalid then compVal = 0
-                if not (compVal >= condition_value["$gte"])
-                    return false
-                end if
+                if not m._compare(value, condition_value["$gte"], "$gte") then return false
             end if
             if condition_value["$veq"] <> invalid
                 ' Version equals
@@ -1191,6 +1189,37 @@ end function
 ' ===================================================================
 function GrowthBook__inRange(n as float, range as object) as boolean
     return n >= range[0] and n < range[1]
+end function
+
+' ===================================================================
+' Compare two values with type coercion and invalid handling
+' Used for numeric comparisons like $lt, $lte, $gt, $gte
+' ===================================================================
+function GrowthBook__compare(v1 as dynamic, v2 as dynamic, op as string) as boolean
+    ' Handle invalid
+    if v1 = invalid then v1 = 0
+    
+    t1 = type(v1)
+    t2 = type(v2)
+    
+    ' Coerce strings to numbers if types differ and one is already a number
+    isNumeric1 = (t1 = "roInteger" or t1 = "Integer" or t1 = "roFloat" or t1 = "Float" or t1 = "Double" or t1 = "LongInteger")
+    isNumeric2 = (t2 = "roInteger" or t2 = "Integer" or t2 = "roFloat" or t2 = "Float" or t2 = "Double" or t2 = "LongInteger")
+    
+    if t1 <> t2
+        if isNumeric1 and (t2 = "roString" or t2 = "String")
+            v2 = Val(v2)
+        else if isNumeric2 and (t1 = "roString" or t1 = "String")
+            v1 = Val(v1)
+        end if
+    end if
+    
+    if op = "$lt" then return v1 < v2
+    if op = "$lte" then return v1 <= v2
+    if op = "$gt" then return v1 > v2
+    if op = "$gte" then return v1 >= v2
+    
+    return false
 end function
 
 ' ===================================================================
