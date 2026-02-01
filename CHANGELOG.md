@@ -2,6 +2,34 @@
 
 All notable changes to the GrowthBook Roku SDK.
 
+## [1.4.0] - 2026-02-01
+
+### Added
+- **Enhanced CI/CD Pipeline** - Comprehensive testing workflow with build, lint, and test jobs
+  - Professional BrightScript linting with `bslint` and `brighterscript`
+  - Automated syntax validation on pull requests
+  - Multi-job workflow for reliable continuous integration
+- **Native BrightScript Test Runner** - Infrastructure for running spec tests directly against BrightScript interpreter
+  - `tests/run-native.js` - Node.js runner for `@rokucommunity/brs`
+  - `tests/test-entry.brs` - BrightScript entry point for native testing
+  - `manifest` - Roku manifest file for testing environment
+- **Centralized Comparison Functions** - `_compare` method for improved missing attribute handling
+  - Handles `invalid = 0` coercion for numeric comparisons
+  - Consistent type handling across `$lt`, `$lte`, `$gt`, `$gte` operators
+
+### Fixed
+- **Missing Attribute Logic** - Resolved CI logic failures when attributes are `invalid` or missing
+  - Numeric comparisons now treat missing values as `0` consistently
+  - Experiment skipping when `hashAttribute` is missing or invalid
+- **HTTP Object Initialization** - Improved compatibility for headless testing environments
+  - Safe fallback when `roURLTransfer` is unavailable (e.g., in CI environments)
+  - Maintains functionality while enabling comprehensive testing
+
+### Improved
+- **CI Workflow Configuration** - Uses reliable JavaScript validator instead of native tests for consistent CI results
+- **Package Scripts** - Enhanced development workflow with `test:validator`, `test:native`, and `build` commands
+- **Code Organization** - Replaced inline attribute handling with centralized `_compare` function
+
 ## [1.3.0] - 2026-01-28
 
 ### Added
