@@ -268,7 +268,7 @@ function GrowthBookTestRunner_runHashTest(test as object) as object
     testName = "hash(" + seed + ", " + valueStr + ", v" + Str(version).Trim() + ")"
     
     ' Create GrowthBook instance
-    gb = GrowthBook({})
+    gb = GrowthBook({http: {}})
     
     ' Run test
     actual = gb._gbhash(seed, value, version)
@@ -303,7 +303,7 @@ function GrowthBookTestRunner_runGetBucketRangeTest(test as object) as object
     if params.Count() > 2 then weights = params[2]
     
     ' Create GrowthBook instance
-    gb = GrowthBook({})
+    gb = GrowthBook({http: {}})
     
     ' Run test
     actual = gb._getBucketRanges(numVariations, coverage, weights)
@@ -335,7 +335,7 @@ function GrowthBookTestRunner_runChooseVariationTest(test as object) as object
     expected = test[3]
     
     ' Create GrowthBook instance
-    gb = GrowthBook({})
+    gb = GrowthBook({http: {}})
     
     ' Run test
     actual = gb._chooseVariation(n, ranges)
