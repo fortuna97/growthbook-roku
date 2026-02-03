@@ -3,29 +3,32 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![BrightScript](https://img.shields.io/badge/BrightScript-2.0-purple.svg)](https://developer.roku.com/docs/references/brightscript/language/brightscript-language-reference.md)
 [![Roku](https://img.shields.io/badge/Roku-SceneGraph-6f3f9f.svg)](https://developer.roku.com/)
-[![Version](https://img.shields.io/badge/version-1.3.0-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.3.1-blue.svg)](CHANGELOG.md)
 [![Production Ready](https://img.shields.io/badge/status-production%20ready-green.svg)](docs/INTEGRATION_GUIDE.md)
 
 Official [GrowthBook](https://www.growthbook.io/) SDK for Roku/BrightScript applications. Add feature flags and A/B testing to your Roku channels with a simple, lightweight SDK.
 
-**Current Version:** v1.3.0 — [View Changelog](CHANGELOG.md) | [Integration Guide](docs/INTEGRATION_GUIDE.md) | [Quick Start](docs/QUICKSTART.md)
+**Current Version:** v1.3.1 — [View Changelog](CHANGELOG.md) | [Integration Guide](docs/INTEGRATION_GUIDE.md) | [Quick Start](docs/QUICKSTART.md)
 
 ## Features
 
 - 🚀 **Lightweight** - Core SDK is ~50KB, minimal memory footprint
 - ⚡ **Fast** - Feature evaluation in <1ms, optimized for Roku devices
-- 🎯 **Powerful Targeting** - Target users by app version, attributes, and segments
-- 🧪 **A/B Testing** - Run experiments with accurate traffic splits (70/30, 50/25/25, etc.)
+- 🎯 **Full Spec Alignment** - Supports v1.3.0 logic (filters, namespaces, ranges, and truthiness)
+- 🧪 **A/B Testing** - Run experiments with accurate traffic splits and holdout groups
 - 🔄 **Consistent Bucketing** - Same user always sees same variation (cross-platform)
-- 📊 **Analytics Ready** - Built-in experiment tracking callbacks
+- 📊 **Analytics Ready** - Detailed experiment tracking and feature usage callbacks
 - 🔒 **Secure** - Support for encrypted feature payloads
+- 📦 **Ropm Support** - Easy dependency management via ropm
 - 🎨 **No Dependencies** - Pure BrightScript, works on all Roku devices (Roku 3+, OS 9.0+)
 
 ## Quick Start
 
 ### 1. Installation
 
-Copy `GrowthBook.brs` to your Roku channel's `source/` directory:
+#### Manual Installation
+
+Copy `GrowthBook.brs` from the `source/` directory to your channel's `source/` folder:
 
 ```brightscript
 your-roku-channel/
@@ -33,6 +36,14 @@ your-roku-channel/
 │   ├── main.brs
 │   └── GrowthBook.brs  ← Add this file
 └── manifest
+```
+
+#### Installation with ropm (Recommended)
+
+If you are using [ropm](https://github.com/rokucommunity/ropm) for dependency management:
+
+```bash
+ropm install growthbook-roku
 ```
 
 ### 2. Initialize
@@ -392,20 +403,30 @@ sub AdvancedTargetingAndExperiments()
             isTestUser: false
         },
         
-        ' Callback fired when user enters an experiment
+        ' Callback fired when user enters an experiment (assigned to a variation)
+        ' Use this to send data to your analytics platform (Firebase, Mixpanel, etc.)
         trackingCallback: sub(experiment, result)
+            ' experiment: { key: string, variations: [] }
+            ' result: { variationId: integer, value: dynamic, source: string, ruleId: string, experimentId: string }
+            
             print "[EXPERIMENT TRACKED]"
             print "  Experiment ID: " + experiment.key
             print "  Variation ID: " + Str(result.variationId)
-            print "  Value: " + Str(result.value)
             
             ' Send to your analytics platform
             SendAnalyticsEvent({
                 event: "experiment_exposed",
-                experimentId: experiment.key,
+                experimentId: result.experimentId,
                 variationId: result.variationId,
-                userId: experiment.userId
+                ruleId: result.ruleId,
+                value: result.value
             })
+        end sub,
+
+        ' Optional: Fired on every feature evaluation (not just experiments)
+        onFeatureUsage: sub(featureKey, result)
+            ' Use this for high-level usage tracking or debugging
+            ' result: { value: dynamic, on: boolean, off: boolean, source: string, ... }
         end sub
     }
     
@@ -600,6 +621,7 @@ Then reference the SDK:
 | `decryptionKey` | string | Optional - Decrypt encrypted feature payloads |
 | `attributes` | object | User attributes for targeting (e.g., `{id: "user-123", premium: true}`) |
 | `trackingCallback` | function | Callback fired when user is placed in an experiment |
+| `onFeatureUsage` | function | Callback fired on every feature evaluation |
 | `enableDevMode` | boolean | Enable verbose logging for debugging |
 
 ### Core Methods
@@ -654,7 +676,20 @@ result = gb.evalFeature("pricing-test")
 print result.value       ' The feature value
 print result.source      ' Where it came from: "defaultValue", "force", "experiment"
 print result.on          ' Boolean: is feature "on"
+print result.ruleId      ' ID of the matching rule
 ```
+
+### Advanced Targeting
+
+The SDK version 1.3.1+ supports all GrowthBook advanced targeting rules:
+
+- **Filters**: Complex user segmentation using hash-based filtering.
+- **Ranges (Intervals)**: Precise traffic control for experiments and rollouts (v1.1.0+).
+- **Namespaces**: Mutually exclusive experiments to prevent overlap.
+- **Prerequisites**: Dependent feature flags (flag A requires flag B).
+- **Forced Variations**: Global variation overrides for testing.
+
+These are handled automatically by the SDK based on your GrowthBook configuration.
 
 ## Examples
 
@@ -671,15 +706,22 @@ See the `examples/` directory for complete working examples:
 
 ## Testing
 
-### Run Tests Without a Device
+### Spec Compliance Tests
 
-Use the JavaScript mock to validate core logic:
+Run the logic validator (JavaScript shim) and native BrightScript tests to ensure 100% parity with the GrowthBook specification:
 
 ```bash
 npm test
 ```
 
+You can also run them individually:
+
+- `npm run test:validator` - Run the logic validator (fast, algorithm validation)
+- `npm run test:native` - Run the native BrightScript tests (validates actual .brs execution)
+
 ### Validate BrightScript Syntax
+
+Check for syntax errors and linting issues:
 
 ```bash
 npm install -g @rokucommunity/bsc
