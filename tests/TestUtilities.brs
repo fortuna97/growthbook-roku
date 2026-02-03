@@ -121,27 +121,28 @@ function formatValue(value as dynamic) as string
         return "invalid"
     end if
     
-    if valueType = "roString"
-        return """" + value + """"
-    end if
-    
-    if valueType = "roInteger" or valueType = "roFloat"
-        return Str(value)
-    end if
-    
-    if valueType = "roBoolean"
+    valType = type(value)
+    if valType = "roBoolean" or valType = "Boolean"
         if value then return "true" else return "false"
     end if
     
-    if valueType = "roArray"
-        return "[Array:" + Str(value.Count()) + "]"
+    if valType = "roString" or valType = "String"
+        return """" + value + """"
     end if
     
-    if valueType = "roAssociativeArray"
+    if valType = "roInteger" or valType = "Integer" or valType = "roFloat" or valType = "Float" or valType = "Double" or valType = "LongInteger"
+        return Str(value).Trim()
+    end if
+    
+    if valType = "roArray"
+        return "[Array:" + Str(value.Count()).Trim() + "]"
+    end if
+    
+    if valType = "roAssociativeArray"
         return "{Object}"
     end if
     
-    return valueType
+    return valType
 end function
 
 ' Simple JSON formatter for debugging

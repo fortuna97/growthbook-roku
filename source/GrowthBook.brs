@@ -17,6 +17,7 @@ function GrowthBook(config as object) as object
         trackingCallback: invalid,
         onFeatureUsage: invalid,
         enableDevMode: false,
+        forcedVariations: {},
         
         ' Internal state
         features: {},
@@ -28,7 +29,7 @@ function GrowthBook(config as object) as object
         isInitialized: false,
         
         ' Network utilities
-        http: CreateObject("roURLTransfer"),
+        http: invalid,
         
         ' Methods
         init: GrowthBook_init,
@@ -48,8 +49,13 @@ function GrowthBook(config as object) as object
         _chooseVariation: GrowthBook__chooseVariation,
         _inRange: GrowthBook__inRange,
         _deepEqual: GrowthBook__deepEqual,
+        _compare: GrowthBook__compare,
         _trackExperiment: GrowthBook__trackExperiment,
         _trackFeatureUsage: GrowthBook__trackFeatureUsage,
+        _evaluateExperiment: GrowthBook__evaluateExperiment,
+        _inNamespace: GrowthBook__inNamespace,
+        _getHashContext: GrowthBook__getHashContext,
+        _isRuleIncluded: GrowthBook__isRuleIncluded,
         _log: GrowthBook__log,
         _hashAttribute: GrowthBook__hashAttribute,
         
@@ -87,12 +93,30 @@ function GrowthBook(config as object) as object
         if config.savedGroups <> invalid
             instance.savedGroups = config.savedGroups
         end if
+        if config.forcedVariations <> invalid
+            instance.forcedVariations = config.forcedVariations
+        end if
     end if
     
     ' Configure HTTP transfer
-    instance.http.SetCertificatesFile("common:/certs/ca-bundle.crt")
-    instance.http.AddHeader("Content-Type", "application/json")
-    instance.http.AddHeader("User-Agent", "GrowthBook-Roku/1.3.0")
+    if config.http <> invalid
+        instance.http = config.http
+    else
+        ' Try to create real roURLTransfer safely
+        ' In some headless environments (like brs), this might throw or fail
+        try
+            instance.http = CreateObject("roURLTransfer")
+        catch e
+            instance.http = invalid
+        end try
+    end if
+    
+    
+    if instance.http <> invalid and type(instance.http) = "roURLTransfer"
+        instance.http.SetCertificatesFile("common:/certs/ca-bundle.crt")
+        instance.http.AddHeader("Content-Type", "application/json")
+        instance.http.AddHeader("User-Agent", "GrowthBook-Roku/1.3.0")
+    end if
     
     return instance
 end function
@@ -310,72 +334,124 @@ function GrowthBook_evalFeature(key as string) as object
         return result
     end if
     
+    result.source = "defaultValue"
+    
     ' Handle feature object
     if type(feature) = "roAssociativeArray"
-        ' Check if feature matches targeting rules
         if feature.rules <> invalid
             for each rule in feature.rules
                 if type(rule) = "roAssociativeArray"
-                    ' Check parent conditions (prerequisites)
-                    if rule.parentConditions <> invalid
-                        for each parent in rule.parentConditions
-                            parentResult = m.evalFeature(parent.id)
-                            ' Propagate cyclic prerequisite
-                            if parentResult.source = "cyclicPrerequisite"
-                                result.source = "cyclicPrerequisite"
-                                m._evaluationStack.Pop()
-                                m._trackFeatureUsage(key, result)
-                                return result
-                            end if
-                            ' Check gate
-                            if parent.gate = true and not parentResult.on
-                                result.source = "prerequisite"
-                                m._evaluationStack.Pop()
-                                m._trackFeatureUsage(key, result)
-                                return result
-                            end if
-                            ' Check condition
-                            if parent.condition <> invalid
-                                tempGB = GrowthBook({ attributes: { value: parentResult.value }, savedGroups: m.savedGroups })
-                                if not tempGB._evaluateConditions(parent.condition)
+                    while true
+                        ' 1. Prerequisites
+                        if rule.parentConditions <> invalid
+                            for each parent in rule.parentConditions
+                                parentResult = m.evalFeature(parent.id)
+                                if parentResult.source = "cyclicPrerequisite"
+                                    result.source = "cyclicPrerequisite"
+                                    m._evaluationStack.Pop()
+                                    m._trackFeatureUsage(key, result)
+                                    return result
+                                end if
+                                
+                                gateFailed = (GrowthBook_toBoolean(parent.gate) and not parentResult.on)
+                                conditionFailed = false
+                                if parent.condition <> invalid
+                                    tempGB = GrowthBook({ attributes: { value: parentResult.value }, savedGroups: m.savedGroups, http: m.http })
+                                    if not tempGB._evaluateConditions(parent.condition) then conditionFailed = true
+                                end if
+                                
+                                if gateFailed or conditionFailed
                                     result.source = "prerequisite"
                                     m._evaluationStack.Pop()
                                     m._trackFeatureUsage(key, result)
                                     return result
                                 end if
-                            end if
-                        end for
-                    end if
-                    
-                    if m._evaluateConditions(rule.condition)
-                        result.value = rule.value
-                        result.on = GrowthBook_toBoolean(rule.value)
-                        result.off = not result.on
-                        result.ruleId = rule.ruleId
-                        result.source = "force"
-                        
-                        ' Handle experiment
-                        if rule.variations <> invalid
-                            result = m._evaluateExperiment(rule, result)
+                            end for
                         end if
                         
-                        m._evaluationStack.Pop()
-                        m._trackFeatureUsage(key, result)
-                        return result
-                    end if
+                        ' 2. Rule Condition
+                        if not m._evaluateConditions(rule.condition) then exit while
+                        
+                        ' Namespace check
+                        if rule.namespace <> invalid
+                            hashAttribute = "id"
+                            if rule.hashAttribute <> invalid and rule.hashAttribute <> "" then hashAttribute = rule.hashAttribute
+                            hashValue = m._getAttributeValue(hashAttribute)
+                            if hashValue = invalid then exit while
+                            if type(hashValue) <> "roString" and type(hashValue) <> "String"
+                                hashValue = Str(hashValue).Trim()
+                            end if
+                            if hashValue = "" then exit while
+                            if not m._inNamespace(hashValue, rule.namespace) then exit while
+                        end if
+                        
+                        ' 3. Force Rule
+                        if rule.DoesExist("force")
+                            ' Handle coverage/range/filters/hashVersion for force rules
+                            if not m._isRuleIncluded(rule, key) then exit while
+                            
+                            result.value = rule.force
+                            result.on = GrowthBook_toBoolean(rule.force)
+                            result.off = not result.on
+                            result.source = "force"
+                            if rule.ruleId <> invalid 
+                                result.ruleId = rule.ruleId
+                            else if rule.id <> invalid
+                                result.ruleId = rule.id
+                            end if
+                            m._evaluationStack.Pop()
+                            m._trackFeatureUsage(key, result)
+                            return result
+                        end if
+                        
+                        ' 4. Experiment Rule
+                        if rule.variations <> invalid
+                            ' Forced Variations check
+                            if m.forcedVariations <> invalid and m.forcedVariations[key] <> invalid
+                                forcedIndex = m.forcedVariations[key]
+                                if forcedIndex >= 0 and forcedIndex < rule.variations.Count()
+                                    result.value = rule.variations[forcedIndex]
+                                    result.on = GrowthBook_toBoolean(result.value)
+                                    result.off = not result.on
+                                    result.source = "experiment"
+                                    if rule.ruleId <> invalid 
+                                        result.ruleId = rule.ruleId
+                                    else if rule.id <> invalid
+                                        result.ruleId = rule.id
+                                    end if
+                                    m._evaluationStack.Pop()
+                                    m._trackFeatureUsage(key, result)
+                                    return result
+                                end if
+                            end if
+                            
+                            expResult = m._evaluateExperiment(rule, result)
+                            if expResult.source = "experiment"
+                                ' Check for passthrough meta
+                                if rule.meta <> invalid and expResult.variationId <> invalid
+                                    variationMeta = rule.meta[expResult.variationId]
+                                    if variationMeta <> invalid and variationMeta.passthrough = true
+                                        exit while
+                                    end if
+                                end if
+                                m._evaluationStack.Pop()
+                                m._trackFeatureUsage(key, expResult)
+                                return expResult
+                            end if
+                        end if
+                        
+                        exit while
+                    end while
                 end if
             end for
         end if
         
         ' Use default value
+        result.source = "defaultValue"
         if feature.defaultValue <> invalid
             result.value = feature.defaultValue
             result.on = GrowthBook_toBoolean(feature.defaultValue)
             result.off = not result.on
-            result.source = "defaultValue"
-            m._evaluationStack.Pop()
-            m._trackFeatureUsage(key, result)
-            return result
         end if
     else
         ' Simple value
@@ -398,55 +474,29 @@ function GrowthBook__evaluateExperiment(rule as object, result as object) as obj
         return result
     end if
     
-    ' Get hash attribute (default to "id")
-    hashAttribute = "id"
-    if rule.hashAttribute <> invalid and rule.hashAttribute <> ""
-        hashAttribute = rule.hashAttribute
-    end if
-    
-    ' Get the attribute value to hash
-    hashValue = m._getAttributeValue(hashAttribute)
-    if hashValue = invalid or hashValue = ""
-        hashValue = "anonymous"
-    end if
-    
-    ' Convert to string if needed
-    if type(hashValue) <> "roString" and type(hashValue) <> "String"
-        hashValue = Str(hashValue).Trim()
-    end if
-    
-    ' Get seed (defaults to experiment key or empty string)
-    seed = ""
-    if rule.seed <> invalid and rule.seed <> ""
-        seed = rule.seed
-    else if rule.key <> invalid
-        seed = rule.key
-    end if
-    
-    ' Get hash version (default to 1)
-    hashVersion = 1
-    if rule.hashVersion <> invalid
-        hashVersion = rule.hashVersion
-    end if
+    ' Get hashing context
+    context = m._getHashContext(rule, result.key)
+    if not context.success then return result
     
     ' Get coverage (defaults to 1.0 = 100%)
     coverage = 1.0
-    if rule.coverage <> invalid
-        coverage = rule.coverage
-    end if
+    if rule.coverage <> invalid then coverage = rule.coverage
     
     ' Calculate hash with seed (returns 0-1)
-    n = m._gbhash(seed, hashValue, hashVersion)
+    n = m._gbhash(context.seed, context.hashValue, context.hashVersion)
     if n = invalid
         return result
     end if
     
-    ' Get weights from rule level
-    weights = rule.weights
-    
-    ' Get bucket ranges using coverage and weights
-    ranges = m._getBucketRanges(rule.variations.Count(), coverage, weights)
-    m._log("Bucket ranges calculated (coverage=" + Str(coverage).Trim() + ")")
+    ' Use provided ranges if available, otherwise calculate from coverage/weights
+    ranges = rule.ranges
+    if ranges = invalid
+        ' Get weights from rule level
+        weights = rule.weights
+        
+        ' Get bucket ranges using coverage and weights
+        ranges = m._getBucketRanges(rule.variations.Count(), coverage, weights)
+    end if
     
     ' Choose variation based on hash and bucket ranges
     variationIndex = m._chooseVariation(n, ranges)
@@ -463,6 +513,12 @@ function GrowthBook__evaluateExperiment(rule as object, result as object) as obj
     result.off = not result.on
     result.variationId = variationIndex
     result.source = "experiment"
+    
+    if rule.ruleId <> invalid 
+        result.ruleId = rule.ruleId
+    else if rule.id <> invalid
+        result.ruleId = rule.id
+    end if
     
     if rule.key <> invalid
         result.experimentId = rule.key
@@ -604,25 +660,16 @@ function GrowthBook__evaluateConditions(condition as object) as boolean
                 end if
             end if
             if condition_value["$lt"] <> invalid
-                ' Only compare if value exists
-                if value = invalid or not (value < condition_value["$lt"])
-                    return false
-                end if
+                if not m._compare(value, condition_value["$lt"], "$lt") then return false
             end if
             if condition_value["$lte"] <> invalid
-                if value = invalid or not (value <= condition_value["$lte"])
-                    return false
-                end if
+                if not m._compare(value, condition_value["$lte"], "$lte") then return false
             end if
             if condition_value["$gt"] <> invalid
-                if value = invalid or not (value > condition_value["$gt"])
-                    return false
-                end if
+                if not m._compare(value, condition_value["$gt"], "$gt") then return false
             end if
             if condition_value["$gte"] <> invalid
-                if value = invalid or not (value >= condition_value["$gte"])
-                    return false
-                end if
+                if not m._compare(value, condition_value["$gte"], "$gte") then return false
             end if
             if condition_value["$veq"] <> invalid
                 ' Version equals
@@ -673,6 +720,7 @@ function GrowthBook__evaluateConditions(condition as object) as boolean
                 end if
             end if
             if condition_value["$in"] <> invalid
+                if type(condition_value["$in"]) <> "roArray" then return false
                 found = false
                 ' Check if value is an array (array intersection)
                 if type(value) = "roArray"
@@ -700,6 +748,7 @@ function GrowthBook__evaluateConditions(condition as object) as boolean
                 end if
             end if
             if condition_value["$nin"] <> invalid
+                if type(condition_value["$nin"]) <> "roArray" then return false
                 found = false
                 ' Check if value is an array (array intersection)
                 if type(value) = "roArray"
@@ -770,7 +819,7 @@ function GrowthBook__evaluateConditions(condition as object) as boolean
                 end if
                 found = false
                 ' Create temp instance once outside loop for performance
-                tempGB = GrowthBook({ attributes: {}, savedGroups: m.savedGroups })
+                tempGB = GrowthBook({ attributes: {}, savedGroups: m.savedGroups, http: {} })
                 for each item in value
                     if type(condition_value["$elemMatch"]) = "roAssociativeArray"
                         ' Update attributes (reuse instance) and prepare condition
@@ -792,20 +841,20 @@ function GrowthBook__evaluateConditions(condition as object) as boolean
                 end if
             end if
             if condition_value["$size"] <> invalid
-                ' Array size check
-                if value = invalid or type(value) <> "roArray"
+                if type(value) <> "roArray"
                     return false
                 end if
                 expectedSize = condition_value["$size"]
-                if type(expectedSize) = "roInteger" or type(expectedSize) = "Integer"
-                    if value.Count() <> expectedSize
+                actualSize = value.Count()
+                if type(expectedSize) = "roAssociativeArray"
+                    ' Nested size condition - create temp GB with size as attribute
+                    tempGB = GrowthBook({ attributes: { "_size": actualSize }, http: {} })
+                    if not tempGB._evaluateConditions({ "_size": expectedSize })
                         return false
                     end if
-                else if type(expectedSize) = "roAssociativeArray"
-                    ' Nested size condition - create temp GB with size as attribute
-                    actualSize = value.Count()
-                    tempGB = GrowthBook({ attributes: { "_size": actualSize }, savedGroups: m.savedGroups })
-                    if not tempGB._evaluateConditions(expectedSize)
+                else
+                    ' Direct size comparison
+                    if actualSize <> expectedSize
                         return false
                     end if
                 end if
@@ -891,7 +940,7 @@ function GrowthBook__evaluateConditions(condition as object) as boolean
             end if
             if condition_value["$not"] <> invalid
                 ' Negation operator on attribute value
-                tempGB = GrowthBook({ attributes: m.attributes, savedGroups: m.savedGroups })
+                tempGB = GrowthBook({ attributes: m.attributes, savedGroups: m.savedGroups, http: {} })
                 tempCondition = {}
                 tempCondition[attr] = condition_value["$not"]
                 if tempGB._evaluateConditions(tempCondition)
@@ -1165,6 +1214,36 @@ function GrowthBook__inRange(n as float, range as object) as boolean
 end function
 
 ' ===================================================================
+' Comparison helper with type coercion
+' ===================================================================
+function GrowthBook__compare(v1 as dynamic, v2 as dynamic, op as string) as boolean
+    ' Handle invalid
+    if v1 = invalid then v1 = 0
+    
+    t1 = type(v1)
+    t2 = type(v2)
+    
+    ' Coerce strings to numbers if types differ and one is already a number
+    isNumeric1 = (t1 = "roInteger" or t1 = "Integer" or t1 = "roFloat" or t1 = "Float" or t1 = "Double" or t1 = "LongInteger")
+    isNumeric2 = (t2 = "roInteger" or t2 = "Integer" or t2 = "roFloat" or t2 = "Float" or t2 = "Double" or t2 = "LongInteger")
+    
+    if t1 <> t2
+        if isNumeric1 and (t2 = "roString" or t2 = "String")
+            v2 = Val(v2)
+        else if isNumeric2 and (t1 = "roString" or t1 = "String")
+            v1 = Val(v1)
+        end if
+    end if
+    
+    if op = "$lt" then return v1 < v2
+    if op = "$lte" then return v1 <= v2
+    if op = "$gt" then return v1 > v2
+    if op = "$gte" then return v1 >= v2
+    
+    return false
+end function
+
+' ===================================================================
 ' Deep equality check for values
 ' Handles null, primitives, arrays, and objects
 ' ===================================================================
@@ -1272,6 +1351,20 @@ sub GrowthBook__trackExperiment(experiment as object, result as object)
 end sub
 
 ' ===================================================================
+' Check if user is in a namespace
+' ===================================================================
+function GrowthBook__inNamespace(userId as string, namespace as object) as boolean
+    if namespace = invalid or type(namespace) <> "roArray" or namespace.Count() <> 3
+        return true
+    end if
+    
+    n = m._gbhash(namespace[0], userId, 1)
+    if n = invalid then return false
+    
+    return n >= namespace[1] and n < namespace[2]
+end function
+
+' ===================================================================
 ' Track feature usage (called on every feature evaluation)
 ' ===================================================================
 sub GrowthBook__trackFeatureUsage(featureKey as string, result as object)
@@ -1303,26 +1396,127 @@ function GrowthBook__hashAttribute(value as string) as integer
 end function
 
 ' ===================================================================
+' Get Hash Context (helper for filters and experiments)
+' ===================================================================
+function GrowthBook__getHashContext(rule as object, featureKey as string) as object
+    ' Get hash attribute (default to "id")
+    ' Get hash value from attributes
+    ' Get hash version (default to 1)
+    ' Get seed (default to feature key)
+    context = {
+        hashAttribute: "id",
+        hashValue: "",
+        hashVersion: 1,
+        seed: featureKey,
+        success: false
+    }
+    
+    if rule = invalid return context
+    
+    ' 1. Hash Attribute
+    if rule.hashAttribute <> invalid and rule.hashAttribute <> ""
+        context.hashAttribute = rule.hashAttribute
+    end if
+    
+    ' 2. Hash Value
+    val = m._getAttributeValue(context.hashAttribute)
+    if val <> invalid
+        if type(val) = "roString" or type(val) = "String"
+            context.hashValue = val
+        else
+            context.hashValue = Str(val).Trim()
+        end if
+    end if
+    
+    if context.hashValue = "" return context
+    
+    ' 3. Hash Version
+    if rule.hashVersion <> invalid
+        context.hashVersion = rule.hashVersion
+    end if
+    
+    ' 4. Seed
+    if rule.seed <> invalid and rule.seed <> ""
+        context.seed = rule.seed
+    else if rule.key <> invalid
+        context.seed = rule.key
+    end if
+    
+    context.success = true
+    return context
+end function
+
+' ===================================================================
+' Check if a rule is included based on filters/rollout
+' ===================================================================
+function GrowthBook__isRuleIncluded(rule as object, featureKey as string) as boolean
+    ' If no hashing logic needed, it's included
+    if rule.coverage = invalid and rule.range = invalid and rule.filters = invalid and (rule.hashVersion = invalid or rule.hashVersion = 1)
+        return true
+    end if
+    
+    context = m._getHashContext(rule, featureKey)
+    if not context.success return false
+    
+    ' 1. Filters
+    if rule.filters <> invalid
+        for each filter in rule.filters
+            filterSeed = featureKey
+            if filter.seed <> invalid then filterSeed = filter.seed
+            n = m._gbhash(filterSeed, context.hashValue, context.hashVersion)
+            if n = invalid return false
+            
+            inAnyRange = false
+            for each rng in filter.ranges
+                if m._inRange(n, rng)
+                    inAnyRange = true
+                    exit for
+                end if
+            end for
+            if not inAnyRange return false
+        end for
+    else
+        ' 2. Standard Rollout/Range
+        n = m._gbhash(context.seed, context.hashValue, context.hashVersion)
+        if n = invalid return false
+        
+        if rule.coverage <> invalid and rule.coverage = 0 return false
+        
+        if rule.range <> invalid
+            if not m._inRange(n, rule.range) return false
+        else if rule.coverage <> invalid
+            if n > rule.coverage return false
+        end if
+    end if
+    
+    return true
+end function
+
+' ===================================================================
 ' Utility Functions
 ' ===================================================================
 
 function GrowthBook_toBoolean(value as dynamic) as boolean
-    if type(value) = "roBoolean"
+    if value = invalid
+        return false
+    end if
+    
+    if type(value) = "roBoolean" or type(value) = "Boolean"
         return value
     end if
     
     if type(value) = "roString" or type(value) = "String"
-        ' Use LCase() global function instead of method for safety
-        return (LCase(value) = "true" or value = "1")
+        return value <> ""
     end if
     
-    if type(value) = "roInteger"
+    if type(value) = "roInteger" or type(value) = "Integer" or type(value) = "LongInteger"
         return value <> 0
     end if
     
-    if type(value) = "roFloat"
+    if type(value) = "roFloat" or type(value) = "Float" or type(value) = "Double"
         return value <> 0.0
     end if
     
-    return false
+    ' Other objects (AA, Array) are truthy
+    return true
 end function
