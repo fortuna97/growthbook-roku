@@ -23,6 +23,7 @@
   "keywords": [
     "growthbook",
     "roku",
+    "ropm",
     "feature-flags",
     "a/b-testing",
     "experiments",
@@ -35,13 +36,17 @@
     "node": ">=14.0.0"
   },
   "files": [
-    "source/",
+    "source/**/*",
     "docs/",
     "examples/",
     "tests/",
     "README.md",
+    "bsconfig.json",
     "LICENSE"
   ],
+  "ropm": {
+    "rootDir": "source" 
+  },
   "homepage": "https://github.com/growthbook/growthbook-roku#readme",
   "bugs": {
     "url": "https://github.com/growthbook/growthbook-roku/issues"
