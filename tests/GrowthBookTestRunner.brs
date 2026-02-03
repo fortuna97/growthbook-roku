@@ -401,6 +401,13 @@ function RunCasesJsonTests(casesPath as string) as object
         return { error: "Failed to load cases.json" }
     end if
     
-    return runner.runAllTests()
+    runner.runAllTests()
+    return {
+        totalPassed: runner.totalPassed,
+        totalFailed: runner.totalFailed,
+        totalSkipped: runner.totalSkipped,
+        results: runner.results
+    }
+
 end function
 
