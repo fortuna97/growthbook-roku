@@ -54,6 +54,8 @@ function GrowthBook(config as object) as object
         _trackFeatureUsage: GrowthBook__trackFeatureUsage,
         _evaluateExperiment: GrowthBook__evaluateExperiment,
         _inNamespace: GrowthBook__inNamespace,
+        _getHashContext: GrowthBook__getHashContext,
+        _isRuleIncluded: GrowthBook__isRuleIncluded,
         _log: GrowthBook__log,
         _hashAttribute: GrowthBook__hashAttribute,
         
@@ -386,66 +388,7 @@ function GrowthBook_evalFeature(key as string) as object
                         ' 3. Force Rule
                         if rule.DoesExist("force")
                             ' Handle coverage/range/filters/hashVersion for force rules
-                            if rule.coverage <> invalid or rule.range <> invalid or rule.filters <> invalid or (rule.hashVersion <> invalid and rule.hashVersion <> 1)
-                                hashAttribute = "id"
-                                if rule.hashAttribute <> invalid and rule.hashAttribute <> "" then hashAttribute = rule.hashAttribute
-                                hashValue = m._getAttributeValue(hashAttribute)
-                                
-                                if hashValue = invalid or (type(hashValue) = "roString" and hashValue = "") or (type(hashValue) = "String" and hashValue = "")
-                                    exit while
-                                end if
-                                if type(hashValue) <> "roString" and type(hashValue) <> "String"
-                                    hashValue = Str(hashValue).Trim()
-                                end if
-                                hashVersion = 1
-                                if rule.hashVersion <> invalid then hashVersion = rule.hashVersion
-                                
-                                if rule.filters <> invalid
-                                    passedFilters = true
-                                    for each filter in rule.filters
-                                        filterSeed = key
-                                        if filter.seed <> invalid then filterSeed = filter.seed
-                                        n = m._gbhash(filterSeed, hashValue, hashVersion)
-                                        if n = invalid
-                                            passedFilters = false
-                                            exit for
-                                        end if
-                                        inAnyRange = false
-                                        for each rng in filter.ranges
-                                            if m._inRange(n, rng)
-                                                inAnyRange = true
-                                                exit for
-                                            end if
-                                        end for
-                                        if not inAnyRange
-                                            passedFilters = false
-                                            exit for
-                                        end if
-                                    end for
-                                    if not passedFilters then exit while
-                                else
-                                    ' Default hashing logic
-                                    seed = key
-                                    if rule.seed <> invalid
-                                        seed = rule.seed
-                                    else if rule.key <> invalid
-                                        seed = rule.key
-                                    end if
-                                    
-                                    n = m._gbhash(seed, hashValue, hashVersion)
-                                    if n = invalid then exit while
-                                    
-                                    if rule.coverage <> invalid and rule.coverage = 0
-                                        exit while
-                                    end if
-                                    
-                                    if rule.range <> invalid
-                                        if not m._inRange(n, rule.range) then exit while
-                                    else if rule.coverage <> invalid
-                                        if n > rule.coverage then exit while
-                                    end if
-                                end if
-                            end if
+                            if not m._isRuleIncluded(rule, key) then exit while
                             
                             result.value = rule.force
                             result.on = GrowthBook_toBoolean(rule.force)
@@ -531,49 +474,16 @@ function GrowthBook__evaluateExperiment(rule as object, result as object) as obj
         return result
     end if
     
-    ' Experiment MUST have a key (default to feature key)
-    seed = result.key
-    if rule.seed <> invalid and rule.seed <> ""
-        seed = rule.seed
-    else if rule.key <> invalid
-        seed = rule.key
-    end if
-    
-    if seed = invalid or seed = ""
-        return result
-    end if
-    
-    ' Get hash attribute (default to "id")
-    hashAttribute = "id"
-    if rule.hashAttribute <> invalid and rule.hashAttribute <> ""
-        hashAttribute = rule.hashAttribute
-    end if
-    
-    ' Get the attribute value to hash
-    hashValue = m._getAttributeValue(hashAttribute)
-    if hashValue = invalid or hashValue = ""
-        return result
-    end if
-    
-    ' Convert to string if needed
-    if type(hashValue) <> "roString" and type(hashValue) <> "String"
-        hashValue = Str(hashValue).Trim()
-    end if
-    
-    ' Get hash version (default to 1)
-    hashVersion = 1
-    if rule.hashVersion <> invalid
-        hashVersion = rule.hashVersion
-    end if
+    ' Get hashing context
+    context = m._getHashContext(rule, result.key)
+    if not context.success then return result
     
     ' Get coverage (defaults to 1.0 = 100%)
     coverage = 1.0
-    if rule.coverage <> invalid
-        coverage = rule.coverage
-    end if
+    if rule.coverage <> invalid then coverage = rule.coverage
     
     ' Calculate hash with seed (returns 0-1)
-    n = m._gbhash(seed, hashValue, hashVersion)
+    n = m._gbhash(context.seed, context.hashValue, context.hashVersion)
     if n = invalid
         return result
     end if
@@ -1483,6 +1393,103 @@ function GrowthBook__hashAttribute(value as string) as integer
     hash = m._gbhash("", value, 1)
     if hash = invalid then return 0
     return Int(hash * 100)
+end function
+
+' ===================================================================
+' Get Hash Context (helper for filters and experiments)
+' ===================================================================
+function GrowthBook__getHashContext(rule as object, featureKey as string) as object
+    ' Get hash attribute (default to "id")
+    ' Get hash value from attributes
+    ' Get hash version (default to 1)
+    ' Get seed (default to feature key)
+    context = {
+        hashAttribute: "id",
+        hashValue: "",
+        hashVersion: 1,
+        seed: featureKey,
+        success: false
+    }
+    
+    if rule = invalid return context
+    
+    ' 1. Hash Attribute
+    if rule.hashAttribute <> invalid and rule.hashAttribute <> ""
+        context.hashAttribute = rule.hashAttribute
+    end if
+    
+    ' 2. Hash Value
+    val = m._getAttributeValue(context.hashAttribute)
+    if val <> invalid
+        if type(val) = "roString" or type(val) = "String"
+            context.hashValue = val
+        else
+            context.hashValue = Str(val).Trim()
+        end if
+    end if
+    
+    if context.hashValue = "" return context
+    
+    ' 3. Hash Version
+    if rule.hashVersion <> invalid
+        context.hashVersion = rule.hashVersion
+    end if
+    
+    ' 4. Seed
+    if rule.seed <> invalid and rule.seed <> ""
+        context.seed = rule.seed
+    else if rule.key <> invalid
+        context.seed = rule.key
+    end if
+    
+    context.success = true
+    return context
+end function
+
+' ===================================================================
+' Check if a rule is included based on filters/rollout
+' ===================================================================
+function GrowthBook__isRuleIncluded(rule as object, featureKey as string) as boolean
+    ' If no hashing logic needed, it's included
+    if rule.coverage = invalid and rule.range = invalid and rule.filters = invalid and (rule.hashVersion = invalid or rule.hashVersion = 1)
+        return true
+    end if
+    
+    context = m._getHashContext(rule, featureKey)
+    if not context.success return false
+    
+    ' 1. Filters
+    if rule.filters <> invalid
+        for each filter in rule.filters
+            filterSeed = featureKey
+            if filter.seed <> invalid then filterSeed = filter.seed
+            n = m._gbhash(filterSeed, context.hashValue, context.hashVersion)
+            if n = invalid return false
+            
+            inAnyRange = false
+            for each rng in filter.ranges
+                if m._inRange(n, rng)
+                    inAnyRange = true
+                    exit for
+                end if
+            end for
+            if not inAnyRange return false
+        end for
+    else
+        ' 2. Standard Rollout/Range
+        n = m._gbhash(context.seed, context.hashValue, context.hashVersion)
+        if n = invalid return false
+        
+        if rule.coverage <> invalid and rule.coverage = 0 return false
+        
+        if rule.range <> invalid
+            if not m._inRange(n, rule.range) return false
+        else if rule.coverage <> invalid
+            if n > rule.coverage return false
+        end if
+    end if
+    
+    return true
 end function
 
 ' ===================================================================
