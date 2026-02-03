@@ -17,6 +17,7 @@ function GrowthBook(config as object) as object
         trackingCallback: invalid,
         onFeatureUsage: invalid,
         enableDevMode: false,
+        forcedVariations: {},
         
         ' Internal state
         features: {},
@@ -52,6 +53,7 @@ function GrowthBook(config as object) as object
         _trackExperiment: GrowthBook__trackExperiment,
         _trackFeatureUsage: GrowthBook__trackFeatureUsage,
         _evaluateExperiment: GrowthBook__evaluateExperiment,
+        _inNamespace: GrowthBook__inNamespace,
         _log: GrowthBook__log,
         _hashAttribute: GrowthBook__hashAttribute,
         
@@ -88,6 +90,9 @@ function GrowthBook(config as object) as object
         end if
         if config.savedGroups <> invalid
             instance.savedGroups = config.savedGroups
+        end if
+        if config.forcedVariations <> invalid
+            instance.forcedVariations = config.forcedVariations
         end if
     end if
     
@@ -331,102 +336,179 @@ function GrowthBook_evalFeature(key as string) as object
     
     ' Handle feature object
     if type(feature) = "roAssociativeArray"
-        ' Check if feature matches targeting rules
         if feature.rules <> invalid
             for each rule in feature.rules
                 if type(rule) = "roAssociativeArray"
-                    ' Check parent conditions (prerequisites)
-                    if rule.parentConditions <> invalid
-                        for each parent in rule.parentConditions
-                            parentResult = m.evalFeature(parent.id)
-                            ' Propagate cyclic prerequisite
-                            if parentResult.source = "cyclicPrerequisite"
-                                result.source = "cyclicPrerequisite"
-                                m._evaluationStack.Pop()
-                                m._trackFeatureUsage(key, result)
-                                return result
-                            end if
-                            ' Check gate
-                            if parent.gate = true and not parentResult.on
-                                result.source = "prerequisite"
-                                m._evaluationStack.Pop()
-                                m._trackFeatureUsage(key, result)
-                                return result
-                            end if
-                            ' Check condition
-                            if parent.condition <> invalid
-                                tempGB = GrowthBook({ attributes: { value: parentResult.value }, savedGroups: m.savedGroups, http: m.http })
-                                if not tempGB._evaluateConditions(parent.condition)
+                    while true
+                        ' 1. Prerequisites
+                        if rule.parentConditions <> invalid
+                            for each parent in rule.parentConditions
+                                parentResult = m.evalFeature(parent.id)
+                                if parentResult.source = "cyclicPrerequisite"
+                                    result.source = "cyclicPrerequisite"
+                                    m._evaluationStack.Pop()
+                                    m._trackFeatureUsage(key, result)
+                                    return result
+                                end if
+                                
+                                gateFailed = (GrowthBook_toBoolean(parent.gate) and not parentResult.on)
+                                conditionFailed = false
+                                if parent.condition <> invalid
+                                    tempGB = GrowthBook({ attributes: { value: parentResult.value }, savedGroups: m.savedGroups, http: m.http })
+                                    if not tempGB._evaluateConditions(parent.condition) then conditionFailed = true
+                                end if
+                                
+                                if gateFailed or conditionFailed
                                     result.source = "prerequisite"
                                     m._evaluationStack.Pop()
                                     m._trackFeatureUsage(key, result)
                                     return result
                                 end if
+                            end for
+                        end if
+                        
+                        ' 2. Rule Condition
+                        if not m._evaluateConditions(rule.condition) then exit while
+                        
+                        ' Namespace check
+                        if rule.namespace <> invalid
+                            hashAttribute = "id"
+                            if rule.hashAttribute <> invalid and rule.hashAttribute <> "" then hashAttribute = rule.hashAttribute
+                            hashValue = m._getAttributeValue(hashAttribute)
+                            if hashValue = invalid then exit while
+                            if type(hashValue) <> "roString" and type(hashValue) <> "String"
+                                hashValue = Str(hashValue).Trim()
                             end if
-                        end for
-                    end if
-                    
-                    if m._evaluateConditions(rule.condition)
-                        ' Force rule
+                            if hashValue = "" then exit while
+                            if not m._inNamespace(hashValue, rule.namespace) then exit while
+                        end if
+                        
+                        ' 3. Force Rule
                         if rule.DoesExist("force")
-                            ' Handle coverage for force rules
-                            isIncluded = true
-                            if rule.coverage <> invalid
+                            ' Handle coverage/range/filters/hashVersion for force rules
+                            if rule.coverage <> invalid or rule.range <> invalid or rule.filters <> invalid or (rule.hashVersion <> invalid and rule.hashVersion <> 1)
                                 hashAttribute = "id"
                                 if rule.hashAttribute <> invalid and rule.hashAttribute <> "" then hashAttribute = rule.hashAttribute
-                                
                                 hashValue = m._getAttributeValue(hashAttribute)
                                 
-                                if hashValue = invalid or hashValue = ""
-                                    isIncluded = false
+                                if hashValue = invalid or (type(hashValue) = "roString" and hashValue = "") or (type(hashValue) = "String" and hashValue = "")
+                                    exit while
+                                end if
+                                if type(hashValue) <> "roString" and type(hashValue) <> "String"
+                                    hashValue = Str(hashValue).Trim()
+                                end if
+                                hashVersion = 1
+                                if rule.hashVersion <> invalid then hashVersion = rule.hashVersion
+                                
+                                if rule.filters <> invalid
+                                    passedFilters = true
+                                    for each filter in rule.filters
+                                        filterSeed = key
+                                        if filter.seed <> invalid then filterSeed = filter.seed
+                                        n = m._gbhash(filterSeed, hashValue, hashVersion)
+                                        if n = invalid
+                                            passedFilters = false
+                                            exit for
+                                        end if
+                                        inAnyRange = false
+                                        for each rng in filter.ranges
+                                            if m._inRange(n, rng)
+                                                inAnyRange = true
+                                                exit for
+                                            end if
+                                        end for
+                                        if not inAnyRange
+                                            passedFilters = false
+                                            exit for
+                                        end if
+                                    end for
+                                    if not passedFilters then exit while
                                 else
-                                    if type(hashValue) <> "roString" and type(hashValue) <> "String"
-                                        hashValue = Str(hashValue).Trim()
+                                    ' Default hashing logic
+                                    seed = key
+                                    if rule.seed <> invalid
+                                        seed = rule.seed
+                                    else if rule.key <> invalid
+                                        seed = rule.key
                                     end if
                                     
-                                    hashVersion = 1
-                                    if rule.hashVersion <> invalid then hashVersion = rule.hashVersion
+                                    n = m._gbhash(seed, hashValue, hashVersion)
+                                    if n = invalid then exit while
                                     
-                                    isIncluded = m._isIncludedInRollout(key, hashValue, hashVersion, rule.coverage)
+                                    if rule.coverage <> invalid and rule.coverage = 0
+                                        exit while
+                                    end if
+                                    
+                                    if rule.range <> invalid
+                                        if not m._inRange(n, rule.range) then exit while
+                                    else if rule.coverage <> invalid
+                                        if n > rule.coverage then exit while
+                                    end if
                                 end if
                             end if
                             
-                            if isIncluded
-                                result.value = rule.force
-                                result.on = GrowthBook_toBoolean(rule.force)
-                                result.off = not result.on
-                                result.source = "force"
-                                if rule.id <> invalid then result.ruleId = rule.id
-                                
+                            result.value = rule.force
+                            result.on = GrowthBook_toBoolean(rule.force)
+                            result.off = not result.on
+                            result.source = "force"
+                            if rule.ruleId <> invalid 
+                                result.ruleId = rule.ruleId
+                            else if rule.id <> invalid
+                                result.ruleId = rule.id
+                            end if
+                            m._evaluationStack.Pop()
+                            m._trackFeatureUsage(key, result)
+                            return result
+                        end if
+                        
+                        ' 4. Experiment Rule
+                        if rule.variations <> invalid
+                            ' Forced Variations check
+                            if m.forcedVariations <> invalid and m.forcedVariations[key] <> invalid
+                                forcedIndex = m.forcedVariations[key]
+                                if forcedIndex >= 0 and forcedIndex < rule.variations.Count()
+                                    result.value = rule.variations[forcedIndex]
+                                    result.on = GrowthBook_toBoolean(result.value)
+                                    result.off = not result.on
+                                    result.source = "experiment"
+                                    if rule.ruleId <> invalid 
+                                        result.ruleId = rule.ruleId
+                                    else if rule.id <> invalid
+                                        result.ruleId = rule.id
+                                    end if
+                                    m._evaluationStack.Pop()
+                                    m._trackFeatureUsage(key, result)
+                                    return result
+                                end if
+                            end if
+                            
+                            expResult = m._evaluateExperiment(rule, result)
+                            if expResult.source = "experiment"
+                                ' Check for passthrough meta
+                                if rule.meta <> invalid and expResult.variationId <> invalid
+                                    variationMeta = rule.meta[expResult.variationId]
+                                    if variationMeta <> invalid and variationMeta.passthrough = true
+                                        exit while
+                                    end if
+                                end if
                                 m._evaluationStack.Pop()
-                                m._trackFeatureUsage(key, result)
-                                return result
+                                m._trackFeatureUsage(key, expResult)
+                                return expResult
                             end if
                         end if
                         
-                        ' Experiment rule
-                        if rule.variations <> invalid
-                            result = m._evaluateExperiment(rule, result)
-                            if result.source = "experiment"
-                                m._evaluationStack.Pop()
-                                m._trackFeatureUsage(key, result)
-                                return result
-                            end if
-                        end if
-                    end if
+                        exit while
+                    end while
                 end if
             end for
         end if
         
         ' Use default value
+        result.source = "defaultValue"
         if feature.defaultValue <> invalid
             result.value = feature.defaultValue
             result.on = GrowthBook_toBoolean(feature.defaultValue)
             result.off = not result.on
-            result.source = "defaultValue"
-            m._evaluationStack.Pop()
-            m._trackFeatureUsage(key, result)
-            return result
         end if
     else
         ' Simple value
@@ -449,8 +531,15 @@ function GrowthBook__evaluateExperiment(rule as object, result as object) as obj
         return result
     end if
     
-    ' Experiment MUST have a key
-    if rule.key = invalid and rule.seed = invalid
+    ' Experiment MUST have a key (default to feature key)
+    seed = result.key
+    if rule.seed <> invalid and rule.seed <> ""
+        seed = rule.seed
+    else if rule.key <> invalid
+        seed = rule.key
+    end if
+    
+    if seed = invalid or seed = ""
         return result
     end if
     
@@ -463,20 +552,12 @@ function GrowthBook__evaluateExperiment(rule as object, result as object) as obj
     ' Get the attribute value to hash
     hashValue = m._getAttributeValue(hashAttribute)
     if hashValue = invalid or hashValue = ""
-        hashValue = "anonymous"
+        return result
     end if
     
     ' Convert to string if needed
     if type(hashValue) <> "roString" and type(hashValue) <> "String"
         hashValue = Str(hashValue).Trim()
-    end if
-    
-    ' Get seed (defaults to experiment key or empty string)
-    seed = ""
-    if rule.seed <> invalid and rule.seed <> ""
-        seed = rule.seed
-    else if rule.key <> invalid
-        seed = rule.key
     end if
     
     ' Get hash version (default to 1)
@@ -497,12 +578,15 @@ function GrowthBook__evaluateExperiment(rule as object, result as object) as obj
         return result
     end if
     
-    ' Get weights from rule level
-    weights = rule.weights
-    
-    ' Get bucket ranges using coverage and weights
-    ranges = m._getBucketRanges(rule.variations.Count(), coverage, weights)
-    m._log("Bucket ranges calculated (coverage=" + Str(coverage).Trim() + ")")
+    ' Use provided ranges if available, otherwise calculate from coverage/weights
+    ranges = rule.ranges
+    if ranges = invalid
+        ' Get weights from rule level
+        weights = rule.weights
+        
+        ' Get bucket ranges using coverage and weights
+        ranges = m._getBucketRanges(rule.variations.Count(), coverage, weights)
+    end if
     
     ' Choose variation based on hash and bucket ranges
     variationIndex = m._chooseVariation(n, ranges)
@@ -519,6 +603,12 @@ function GrowthBook__evaluateExperiment(rule as object, result as object) as obj
     result.off = not result.on
     result.variationId = variationIndex
     result.source = "experiment"
+    
+    if rule.ruleId <> invalid 
+        result.ruleId = rule.ruleId
+    else if rule.id <> invalid
+        result.ruleId = rule.id
+    end if
     
     if rule.key <> invalid
         result.experimentId = rule.key
@@ -1351,6 +1441,20 @@ sub GrowthBook__trackExperiment(experiment as object, result as object)
 end sub
 
 ' ===================================================================
+' Check if user is in a namespace
+' ===================================================================
+function GrowthBook__inNamespace(userId as string, namespace as object) as boolean
+    if namespace = invalid or type(namespace) <> "roArray" or namespace.Count() <> 3
+        return true
+    end if
+    
+    n = m._gbhash(namespace[0], userId, 1)
+    if n = invalid then return false
+    
+    return n >= namespace[1] and n < namespace[2]
+end function
+
+' ===================================================================
 ' Track feature usage (called on every feature evaluation)
 ' ===================================================================
 sub GrowthBook__trackFeatureUsage(featureKey as string, result as object)
@@ -1386,14 +1490,16 @@ end function
 ' ===================================================================
 
 function GrowthBook_toBoolean(value as dynamic) as boolean
+    if value = invalid
+        return false
+    end if
+    
     if type(value) = "roBoolean" or type(value) = "Boolean"
         return value
     end if
     
     if type(value) = "roString" or type(value) = "String"
-        ' Use LCase() global function instead of method for safety
-        normalized = LCase(value)
-        return (normalized = "true" or normalized = "1" or normalized = "yes" or normalized = "on")
+        return value <> ""
     end if
     
     if type(value) = "roInteger" or type(value) = "Integer" or type(value) = "LongInteger"
@@ -1404,5 +1510,6 @@ function GrowthBook_toBoolean(value as dynamic) as boolean
         return value <> 0.0
     end if
     
-    return false
+    ' Other objects (AA, Array) are truthy
+    return true
 end function
