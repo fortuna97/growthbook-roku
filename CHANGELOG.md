@@ -2,6 +2,14 @@
 
 All notable changes to the GrowthBook Roku SDK.
 
+## [1.3.1] - 2026-02-03
+
+### Changes
+- **Ropm support** - Added support for ropm
+- Minor documentation updates
+
+---
+
 ## [1.3.0] - 2026-01-28
 
 ### Added
