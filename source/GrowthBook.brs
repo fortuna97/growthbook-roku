@@ -355,7 +355,7 @@ function GrowthBook_evalFeature(key as string) as object
                             end if
                             ' Check condition
                             if parent.condition <> invalid
-                                tempGB = GrowthBook({ attributes: { value: parentResult.value }, savedGroups: m.savedGroups })
+                                tempGB = GrowthBook({ attributes: { value: parentResult.value }, savedGroups: m.savedGroups, http: m.http })
                                 if not tempGB._evaluateConditions(parent.condition)
                                     result.source = "prerequisite"
                                     m._evaluationStack.Pop()
