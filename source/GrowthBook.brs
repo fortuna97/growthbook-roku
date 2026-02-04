@@ -208,34 +208,49 @@ function GrowthBook__loadFeaturesFromAPI() as boolean
 end function
 
 ' ===================================================================
-' Parse features from JSON response
+' Parse features from JSON response (supports encrypted payloads)
 ' ===================================================================
 function GrowthBook__parseFeatures(json as string) as object
     if json = ""
         return invalid
     end if
     
-    ' Simple JSON parser for feature response
-    ' GrowthBook API returns: { "features": { "key": {...}, ... } }
-    
     ' Use Roku's built-in JSON parsing
     root = ParseJson(json)
     
-    if root <> invalid and root.features <> invalid
+    if root = invalid
+        m._log("ERROR: Failed to parse features JSON")
+        return invalid
+    end if
+    
+    ' Check for encrypted features
+    if root.encryptedFeatures <> invalid and root.encryptedFeatures <> ""
+        if m.decryptionKey <> invalid and m.decryptionKey <> ""
+            decrypted = m._decrypt(root.encryptedFeatures, m.decryptionKey)
+            if decrypted <> ""
+                decryptedFeatures = ParseJson(decrypted)
+                if decryptedFeatures <> invalid
+                    m.features = decryptedFeatures
+                    return decryptedFeatures
+                end if
+            end if
+            m._log("ERROR: Failed to decrypt encryptedFeatures")
+            return invalid
+        else
+            m._log("ERROR: encryptedFeatures present but no decryptionKey provided")
+            return invalid
+        end if
+    end if
+    
+    ' Handle unencrypted features
+    if root.features <> invalid
         m.features = root.features
         return root.features
     end if
     
     ' Fallback: assume the response is already features object
-    features = ParseJson(json)
-    if features <> invalid
-        m.features = features
-        return features
-    end if
-    
-    m._log("ERROR: Failed to parse features JSON")
-    
-    return invalid
+    m.features = root
+    return root
 end function
 
 ' ===================================================================
