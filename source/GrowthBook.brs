@@ -58,6 +58,7 @@ function GrowthBook(config as object) as object
         _isRuleIncluded: GrowthBook__isRuleIncluded,
         _log: GrowthBook__log,
         _hashAttribute: GrowthBook__hashAttribute,
+        _decrypt: GrowthBook__decrypt,
         
         ' Helpers (exposed for internal use)
         toBoolean: GrowthBook_toBoolean
@@ -1519,4 +1520,96 @@ function GrowthBook_toBoolean(value as dynamic) as boolean
     
     ' Other objects (AA, Array) are truthy
     return true
+end function
+
+' ===================================================================
+' AES-128-CBC Decryption for Encrypted Feature Payloads
+' Requires Roku OS 9.2+ for roEVPCipher support
+' ===================================================================
+function GrowthBook__decrypt(encryptedStr as string, keyStr as string) as string
+    ' Validate inputs
+    if encryptedStr = "" or keyStr = "" then return ""
+    
+    ' Format: "base64(iv).base64(ciphertext)"
+    dotIndex = Instr(1, encryptedStr, ".")
+    if dotIndex = 0 or dotIndex = 1 then return ""
+    
+    ivStr = Left(encryptedStr, dotIndex - 1)
+    ctStr = Mid(encryptedStr, dotIndex + 1)
+    if ivStr = "" or ctStr = "" then return ""
+    
+    ' Base64 decode all components
+    keyBytes = CreateObject("roByteArray")
+    ivBytes = CreateObject("roByteArray")
+    ctBytes = CreateObject("roByteArray")
+    
+    ' Decode key - FromBase64String may silently fail on invalid input
+    keyBytes.FromBase64String(keyStr)
+    if keyBytes.Count() = 0
+        m._log("ERROR: Invalid or empty base64 key")
+        return ""
+    end if
+    
+    ' Decode IV
+    ivBytes.FromBase64String(ivStr)
+    if ivBytes.Count() = 0
+        m._log("ERROR: Invalid or empty base64 IV")
+        return ""
+    end if
+    
+    ' Decode ciphertext
+    ctBytes.FromBase64String(ctStr)
+    if ctBytes.Count() = 0
+        m._log("ERROR: Invalid or empty base64 ciphertext")
+        return ""
+    end if
+    
+    ' Validate AES-128 requirements
+    ' Key must be 16 bytes (128 bits)
+    if keyBytes.Count() <> 16
+        m._log("ERROR: Key must be 16 bytes for AES-128")
+        return ""
+    end if
+    
+    ' IV must be 16 bytes (block size)
+    if ivBytes.Count() <> 16
+        m._log("ERROR: IV must be 16 bytes")
+        return ""
+    end if
+    
+    ' Ciphertext must be non-empty and multiple of block size
+    if ctBytes.Count() = 0 or ctBytes.Count() mod 16 <> 0
+        m._log("ERROR: Invalid ciphertext length")
+        return ""
+    end if
+    
+    ' Create cipher (requires Roku OS 9.2+)
+    cipher = CreateObject("roEVPCipher")
+    if cipher = invalid
+        m._log("ERROR: roEVPCipher not available (requires Roku OS 9.2+)")
+        return ""
+    end if
+    
+    ' Setup: false=decrypt, aes-128-cbc algorithm, key, iv, padding=1 (PKCS7)
+    if not cipher.Setup(false, "aes-128-cbc", keyBytes, ivBytes, 1)
+        m._log("ERROR: Cipher setup failed")
+        return ""
+    end if
+    
+    ' Process the encrypted data
+    decrypted = cipher.Process(ctBytes)
+    if decrypted = invalid
+        m._log("ERROR: Decryption failed")
+        return ""
+    end if
+    
+    ' Get final block (handles PKCS7 padding removal)
+    finalBlock = cipher.Final()
+    if finalBlock <> invalid and finalBlock.Count() > 0
+        decrypted.Append(finalBlock)
+    end if
+    
+    if decrypted.Count() = 0 then return ""
+    
+    return decrypted.ToAsciiString()
 end function

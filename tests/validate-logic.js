@@ -13,6 +13,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
 // Load test cases
 const casesPath = path.join(__dirname, 'cases.json');
@@ -20,6 +21,43 @@ const cases = JSON.parse(fs.readFileSync(casesPath, 'utf8'));
 
 console.log('🧪 GrowthBook BrightScript Logic Validator\n');
 console.log(`Loaded ${Object.keys(cases).length} test categories from cases.json\n`);
+
+// ================================================================
+// Decrypt Function (mirrors BrightScript GrowthBook__decrypt)
+// ================================================================
+
+function decrypt(encryptedStr, keyStr) {
+    try {
+        if (!encryptedStr || !keyStr) return null;
+        
+        // Format: "base64(iv).base64(ciphertext)"
+        const dotIndex = encryptedStr.indexOf('.');
+        if (dotIndex === -1 || dotIndex === 0) return null;
+        
+        const ivStr = encryptedStr.substring(0, dotIndex);
+        const ctStr = encryptedStr.substring(dotIndex + 1);
+        if (!ivStr || !ctStr) return null;
+        
+        // Base64 decode
+        const key = Buffer.from(keyStr, 'base64');
+        const iv = Buffer.from(ivStr, 'base64');
+        const ct = Buffer.from(ctStr, 'base64');
+        
+        // Validate lengths
+        if (key.length !== 16) return null;  // AES-128 requires 16-byte key
+        if (iv.length !== 16) return null;   // CBC IV must be 16 bytes
+        if (ct.length === 0 || ct.length % 16 !== 0) return null;
+        
+        // Decrypt using AES-128-CBC with PKCS7 padding
+        const decipher = crypto.createDecipheriv('aes-128-cbc', key, iv);
+        let decrypted = decipher.update(ct);
+        decrypted = Buffer.concat([decrypted, decipher.final()]);
+        
+        return decrypted.toString('utf8');
+    } catch (e) {
+        return null;
+    }
+}
 
 // ================================================================
 // Mock GrowthBook Implementation (JavaScript version of your BrightScript)
@@ -797,6 +835,21 @@ function runTests(category, tests) {
                     process.stdout.write('✗');
                     failures.push({ name, expected: JSON.stringify(expected), actual: JSON.stringify(result) });
                 }
+            } else if (category === 'decrypt') {
+                // decrypt tests: [name, encryptedString, key, expected]
+                const [encryptedStr, key, expected] = rest;
+                result = decrypt(encryptedStr, key);
+                
+                // null expected means error case (should return null)
+                // string expected means successful decryption
+                if (result === expected) {
+                    passed++;
+                    process.stdout.write('✓');
+                } else {
+                    failed++;
+                    process.stdout.write('✗');
+                    failures.push({ name, expected: expected === null ? 'null' : expected, actual: result === null ? 'null' : result });
+                }
             } else {
                 // Skip tests for categories not yet implemented
                 process.stdout.write('○');
@@ -835,7 +888,7 @@ function runTests(category, tests) {
 // ================================================================
 
 const results = {};
-const categories = ['evalCondition', 'hash', 'getBucketRange', 'chooseVariation', 'feature'];
+const categories = ['evalCondition', 'hash', 'getBucketRange', 'chooseVariation', 'feature', 'decrypt'];
 
 for (const category of categories) {
     if (cases[category]) {
