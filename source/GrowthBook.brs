@@ -231,21 +231,45 @@ function GrowthBook__parseFeatures(json as string) as object
                 decryptedFeatures = ParseJson(decrypted)
                 if decryptedFeatures <> invalid
                     m.features = decryptedFeatures
-                    return decryptedFeatures
+                else
+                    m._log("ERROR: Failed to parse decrypted features")
+                    return invalid
                 end if
+            else
+                m._log("ERROR: Failed to decrypt encryptedFeatures")
+                return invalid
             end if
-            m._log("ERROR: Failed to decrypt encryptedFeatures")
-            return invalid
         else
             m._log("ERROR: encryptedFeatures present but no decryptionKey provided")
             return invalid
         end if
     end if
+
+    ' Handle encrypted saved groups
+    if root.encryptedSavedGroups <> invalid and root.encryptedSavedGroups <> "" and m.decryptionKey <> invalid and m.decryptionKey <> ""
+        decrypted = m._decrypt(root.encryptedSavedGroups, m.decryptionKey)
+        if decrypted <> ""
+            decryptedGroups = ParseJson(decrypted)
+            if decryptedGroups <> invalid
+                m.savedGroups = decryptedGroups
+            end if
+        end if
+    end if
+
+    ' Handle saved groups from response (only if not encrypted)
+    if root.encryptedSavedGroups = invalid and root.savedGroups <> invalid
+        m.savedGroups = root.savedGroups
+    end if
     
-    ' Handle unencrypted features
-    if root.features <> invalid
+    ' Handle unencrypted features (only if not encrypted)
+    if root.encryptedFeatures = invalid and root.features <> invalid
         m.features = root.features
-        return root.features
+        return m.features
+    end if
+
+    ' If we processed encryptedFeatures successfully, return them (even if empty)
+    if root.encryptedFeatures <> invalid and root.encryptedFeatures <> ""
+        return m.features
     end if
     
     ' Fallback: assume the response is already features object
