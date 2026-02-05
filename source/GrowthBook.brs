@@ -37,6 +37,7 @@ function GrowthBook(config as object) as object
         isOn: GrowthBook_isOn,
         getFeatureValue: GrowthBook_getFeatureValue,
         evalFeature: GrowthBook_evalFeature,
+        refreshFeatures: GrowthBook_refreshFeatures,
         _loadFeaturesFromAPI: GrowthBook__loadFeaturesFromAPI,
         _parseFeatures: GrowthBook__parseFeatures,
         _evaluateConditions: GrowthBook__evaluateConditions,
@@ -579,6 +580,25 @@ sub GrowthBook_setAttributes(attrs as object)
         m._log("Attributes updated")
     end if
 end sub
+
+' ===================================================================
+' Refresh features from the GrowthBook API
+' Call this when you want to fetch updated features on-demand
+' Note: BrightScript is single-threaded, so automatic polling is not possible
+' ===================================================================
+function GrowthBook_refreshFeatures() as boolean
+    if m.clientKey = "" or m.clientKey = invalid
+        m._log("ERROR: clientKey required for refresh")
+        return false
+    end if
+    
+    if m.http = invalid
+        m._log("ERROR: HTTP not available")
+        return false
+    end if
+    
+    return m._loadFeaturesFromAPI()
+end function
 
 ' ===================================================================
 ' Get attribute value (supports nested paths like "user.age")
