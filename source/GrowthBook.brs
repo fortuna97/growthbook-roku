@@ -1457,6 +1457,7 @@ end function
 
 ' ===================================================================
 ' Get Hash Context (helper for filters and experiments)
+' Supports fallbackAttribute for sticky bucketing prerequisites
 ' ===================================================================
 function GrowthBook__getHashContext(rule as object, featureKey as string) as object
     ' Get hash attribute (default to "id")
@@ -1478,13 +1479,30 @@ function GrowthBook__getHashContext(rule as object, featureKey as string) as obj
         context.hashAttribute = rule.hashAttribute
     end if
     
-    ' 2. Hash Value
+    ' 2. Hash Value - try primary attribute first
     val = m._getAttributeValue(context.hashAttribute)
     if val <> invalid
         if type(val) = "roString" or type(val) = "String"
             context.hashValue = val
         else
             context.hashValue = Str(val).Trim()
+        end if
+    end if
+    
+    ' 2b. FALLBACK - if primary value empty, try fallbackAttribute
+    ' This is used for sticky bucketing when the primary hash attribute is not available
+    if context.hashValue = "" and rule.fallbackAttribute <> invalid and rule.fallbackAttribute <> ""
+        val = m._getAttributeValue(rule.fallbackAttribute)
+        if val <> invalid
+            if type(val) = "roString" or type(val) = "String"
+                context.hashValue = val
+            else
+                context.hashValue = Str(val).Trim()
+            end if
+            ' Only update hashAttribute if we successfully got a fallback value
+            if context.hashValue <> ""
+                context.hashAttribute = rule.fallbackAttribute
+            end if
         end if
     end if
     
