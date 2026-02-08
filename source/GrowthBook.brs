@@ -25,6 +25,7 @@ function GrowthBook(config as object) as object
         savedGroups: {},
         _evaluationStack: [],
         _trackedExperiments: {},
+        trackingPlugins: [],
         lastUpdate: 0,
         isInitialized: false,
         
@@ -60,6 +61,10 @@ function GrowthBook(config as object) as object
         _log: GrowthBook__log,
         _hashAttribute: GrowthBook__hashAttribute,
         _decrypt: GrowthBook__decrypt,
+        _notifyPlugins: GrowthBook__notifyPlugins,
+        
+        ' Public API
+        registerTrackingPlugin: GrowthBook_registerTrackingPlugin,
         
         ' Helpers (exposed for internal use)
         toBoolean: GrowthBook_toBoolean
@@ -97,6 +102,9 @@ function GrowthBook(config as object) as object
         end if
         if config.forcedVariations <> invalid
             instance.forcedVariations = config.forcedVariations
+        end if
+        if config.trackingPlugins <> invalid
+            instance.trackingPlugins = config.trackingPlugins
         end if
     end if
     
@@ -1369,10 +1377,6 @@ end function
 ' Track experiment exposure (with de-duplication)
 ' ===================================================================
 sub GrowthBook__trackExperiment(experiment as object, result as object)
-    if m.trackingCallback = invalid
-        return
-    end if
-    
     ' Build unique tracking key to prevent duplicate tracking
     hashAttribute = "id"
     if experiment.hashAttribute <> invalid then hashAttribute = experiment.hashAttribute
@@ -1398,7 +1402,7 @@ sub GrowthBook__trackExperiment(experiment as object, result as object)
     
     trackingKey = hashAttribute + "|" + hashValue + "|" + experimentKey + "|" + variationId
     
-    ' Skip if already tracked
+    ' Skip if already tracked (applies to both callback and plugins)
     if m._trackedExperiments.DoesExist(trackingKey)
         return
     end if
@@ -1406,8 +1410,13 @@ sub GrowthBook__trackExperiment(experiment as object, result as object)
     ' Mark as tracked
     m._trackedExperiments[trackingKey] = true
     
-    ' Call the tracking callback
-    m.trackingCallback(experiment, result)
+    ' Call the tracking callback if set
+    if m.trackingCallback <> invalid
+        m.trackingCallback(experiment, result)
+    end if
+    
+    ' Notify tracking plugins
+    m._notifyPlugins("experimentViewed", { experiment: experiment, result: result })
 end sub
 
 ' ===================================================================
@@ -1428,12 +1437,39 @@ end function
 ' Track feature usage (called on every feature evaluation)
 ' ===================================================================
 sub GrowthBook__trackFeatureUsage(featureKey as string, result as object)
-    if m.onFeatureUsage = invalid
-        return
+    ' Call the feature usage callback if set
+    if m.onFeatureUsage <> invalid
+        m.onFeatureUsage(featureKey, result)
     end if
     
-    ' Call the feature usage callback
-    m.onFeatureUsage(featureKey, result)
+    ' Notify tracking plugins
+    m._notifyPlugins("featureUsage", { featureKey: featureKey, result: result })
+end sub
+
+' ===================================================================
+' Notify tracking plugins of events
+' ===================================================================
+sub GrowthBook__notifyPlugins(eventType as string, data as object)
+    for each plugin in m.trackingPlugins
+        if eventType = "experimentViewed" and plugin.onExperimentViewed <> invalid
+            plugin.onExperimentViewed(data.experiment, data.result)
+        else if eventType = "featureUsage" and plugin.onFeatureUsage <> invalid
+            plugin.onFeatureUsage(data.featureKey, data.result)
+        end if
+    end for
+end sub
+
+' ===================================================================
+' Register a tracking plugin for event notifications
+' ===================================================================
+sub GrowthBook_registerTrackingPlugin(plugin as object)
+    if type(plugin) = "roAssociativeArray"
+        m.trackingPlugins.Push(plugin)
+        ' Initialize plugin if it has an init method
+        if plugin.init <> invalid
+            plugin.init(m)
+        end if
+    end if
 end sub
 
 ' ===================================================================
