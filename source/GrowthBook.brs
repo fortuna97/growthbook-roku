@@ -1726,3 +1726,90 @@ function GrowthBook__decrypt(encryptedStr as string, keyStr as string) as string
     
     return decrypted.ToAsciiString()
 end function
+
+' ===================================================================
+' GrowthBook Tracking Plugin - Built-in Data Warehouse Integration
+' Batches experiment and feature events, sends via HTTP POST
+' ===================================================================
+function GrowthBookTrackingPlugin(config as object) as object
+    instance = {
+        ' Configuration
+        ingestorHost: "",
+        clientKey: "",
+        batchSize: 10,
+        
+        ' State
+        eventQueue: [],
+        http: invalid,
+        
+        ' Methods
+        init: GrowthBookTrackingPlugin_init,
+        onExperimentViewed: GrowthBookTrackingPlugin_onExperimentViewed,
+        onFeatureUsage: GrowthBookTrackingPlugin_onFeatureUsage,
+        flush: GrowthBookTrackingPlugin_flush
+    }
+    
+    if config.ingestorHost <> invalid then instance.ingestorHost = config.ingestorHost
+    if config.clientKey <> invalid then instance.clientKey = config.clientKey
+    if config.batchSize <> invalid then instance.batchSize = config.batchSize
+    
+    return instance
+end function
+
+sub GrowthBookTrackingPlugin_init(gb as object)
+    if gb.http <> invalid
+        m.http = gb.http
+    else
+        try
+            m.http = CreateObject("roURLTransfer")
+            m.http.SetCertificatesFile("common:/certs/ca-bundle.crt")
+        catch e
+            m.http = invalid
+        end try
+    end if
+end sub
+
+sub GrowthBookTrackingPlugin_onExperimentViewed(experiment as object, result as object)
+    event = {
+        event_type: "experiment_viewed",
+        timestamp: CreateObject("roDateTime").AsSeconds(),
+        experiment_id: experiment.key,
+        variation_id: result.variationId
+    }
+    m.eventQueue.Push(event)
+    
+    if m.eventQueue.Count() >= m.batchSize
+        m.flush()
+    end if
+end sub
+
+sub GrowthBookTrackingPlugin_onFeatureUsage(featureKey as string, result as object)
+    event = {
+        event_type: "feature_evaluated",
+        timestamp: CreateObject("roDateTime").AsSeconds(),
+        feature_key: featureKey,
+        value: result.value,
+        source: result.source
+    }
+    m.eventQueue.Push(event)
+    
+    if m.eventQueue.Count() >= m.batchSize
+        m.flush()
+    end if
+end sub
+
+sub GrowthBookTrackingPlugin_flush()
+    if m.eventQueue.Count() = 0 then return
+    if m.http = invalid then return
+    if m.ingestorHost = "" then return
+    
+    payload = FormatJson({
+        events: m.eventQueue,
+        clientKey: m.clientKey
+    })
+    
+    m.http.SetUrl(m.ingestorHost + "/events")
+    m.http.AsyncPostFromString(payload)
+    
+    m.eventQueue = []
+end sub
