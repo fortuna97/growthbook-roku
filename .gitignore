@@ -32,5 +32,5 @@ out.zip
 *.zip
 *.pkg
 
-# Test Channel
-test-channel
+# Test Channel (run locally with brs-desktop, not committed)
+test-channel/

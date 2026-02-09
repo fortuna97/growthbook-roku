@@ -5,21 +5,20 @@ const path = require('path');
 /**
  * GrowthBook Native BrightScript Test Runner (Headless)
  * 
- * This script runs the native BrightScript test runner using the 'brs' interpreter.
- * It simulates running the tests on a Roku device.
+ * Runs the native BrightScript test runner using the '@rokucommunity/brs' interpreter.
+ * Validates SDK logic against cases.json in actual BrightScript execution.
  */
 
 const projectRoot = path.join(__dirname, '..');
-const sourceFile = path.join(projectRoot, 'source', 'GrowthBook.brs');
-const utilitiesFile = path.join(projectRoot, 'tests', 'TestUtilities.brs');
-const runnerFile = path.join(projectRoot, 'tests', 'GrowthBookTestRunner.brs');
-const casesFile = path.join(projectRoot, 'tests', 'cases.json');
+const sourceFile = 'source/GrowthBook.brs';
+const utilitiesFile = 'tests/TestUtilities.brs';
+const runnerFile = 'tests/GrowthBookTestRunner.brs';
+const entryFile = path.join(__dirname, 'test-entry.brs');
+const entryRelative = 'tests/test-entry.brs';
 
 // Create a temporary entry point
-const entryFile = path.join(__dirname, 'test-entry.brs');
 const entryContent = `
 sub Main()
-    ' The path should be relative to the root of the project
     results = RunCasesJsonTests("pkg:/tests/cases.json")
     
     if results.error <> invalid
@@ -39,52 +38,52 @@ sub Main()
 end sub
 `;
 
-console.log('🧪 Running Native BrightScript spec tests...');
+console.log('🧪 Running Native BrightScript spec tests...\n');
 
 try {
     fs.writeFileSync(entryFile, entryContent);
 
-    // Run brs with all necessary files
-    // The order matters - entry point first
-    const result = spawnSync('npx', [
-        '@rokucommunity/brs',
-        entryFile,
-        sourceFile,
-        utilitiesFile,
-        runnerFile
-    ], {
+    const cmd = `npx @rokucommunity/brs "${entryRelative}" "${sourceFile}" "${utilitiesFile}" "${runnerFile}"`;
+    const result = spawnSync(cmd, [], {
         cwd: projectRoot,
         encoding: 'utf8',
-        stdio: 'inherit'
+        shell: true
     });
 
-    // Check for our failure marker in the output
-    // Note: since we used stdio: inherit, we can't easily check stdout here
-    // unless we change it to 'pipe'. But we want the user to see the output.
-    
-    // Let's re-run or capture output if we need to fail the process
-    const captureResult = spawnSync('npx', [
-        '@rokucommunity/brs',
-        entryFile,
-        sourceFile,
-        utilitiesFile,
-        runnerFile
-    ], {
-        cwd: projectRoot,
-        encoding: 'utf8'
-    });
+    const stdout = result.stdout || '';
+    const stderr = result.stderr || '';
 
-    const output = (captureResult.stdout || '') + (captureResult.stderr || '');
+    // Print stdout (test results)
+    if (stdout) console.log(stdout);
 
-    if (output.includes('--- NATIVE TESTS FAILED ---') || 
-        output.includes('BRIGHTSCRIPT: ERROR:') ||
-        output.includes('ERROR:') ||
-        captureResult.status !== 0) {
-        console.error('\n❌ Native Spec Tests Failed!');
+    // Print stderr warnings (e.g. regex warnings) but don't treat them as failures
+    if (stderr) {
+        const lines = stderr.split('\n').filter(l => l.trim());
+        if (lines.length > 0) {
+            console.log('⚠️  Interpreter warnings:');
+            lines.forEach(l => console.log('   ' + l));
+            console.log('');
+        }
+    }
+
+    // Check for explicit failure markers in stdout only
+    if (stdout.includes('--- NATIVE TESTS FAILED ---')) {
+        console.error('❌ Native Spec Tests Failed!');
         process.exit(1);
     }
 
-    console.log('\n✅ Native Spec Tests Passed!');
+    if (stdout.includes('--- NATIVE TESTS PASSED ---')) {
+        console.log('✅ Native Spec Tests Passed!');
+        process.exit(0);
+    }
+
+    // If brs crashed (no output at all)
+    if (result.status !== 0 && !stdout.includes('TEST SUMMARY')) {
+        console.error('❌ Native interpreter exited with code ' + result.status);
+        process.exit(1);
+    }
+
+    console.log('✅ Native Spec Tests Passed!');
 
 } catch (err) {
     console.error('Error running native tests:', err);

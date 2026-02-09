@@ -26,6 +26,8 @@ function GrowthBook(config as object) as object
         _evaluationStack: [],
         _trackedExperiments: {},
         trackingPlugins: [],
+        stickyBucketService: invalid,
+        _stickyBucketAssignmentDocs: {},
         lastUpdate: 0,
         isInitialized: false,
         
@@ -44,6 +46,7 @@ function GrowthBook(config as object) as object
         _evaluateConditions: GrowthBook__evaluateConditions,
         _getAttributeValue: GrowthBook__getAttributeValue,
         _fnv1a32: GrowthBook__fnv1a32,
+        _longToStr: GrowthBook__longToStr,
         _gbhash: GrowthBook__gbhash,
         _paddedVersionString: GrowthBook__paddedVersionString,
         _isIncludedInRollout: GrowthBook__isIncludedInRollout,
@@ -105,6 +108,12 @@ function GrowthBook(config as object) as object
         end if
         if config.trackingPlugins <> invalid
             instance.trackingPlugins = config.trackingPlugins
+        end if
+        if config.stickyBucketService <> invalid
+            instance.stickyBucketService = config.stickyBucketService
+        end if
+        if config.stickyBucketAssignmentDocs <> invalid
+            instance._stickyBucketAssignmentDocs = config.stickyBucketAssignmentDocs
         end if
     end if
     
@@ -1077,6 +1086,23 @@ function GrowthBook__fnv1a32(str as string) as longinteger
 end function
 
 ' ===================================================================
+' Convert LongInteger to string without using Str()
+' Avoids brs-engine Str() coercing LongInteger to Float (32-bit),
+' which loses precision for values > 7 significant digits
+' ===================================================================
+function GrowthBook__longToStr(val as longinteger) as string
+    if val = 0 then return "0"
+    result = ""
+    remaining& = val
+    while remaining& > 0
+        digit% = remaining& mod 10
+        result = Chr(48 + digit%) + result
+        remaining& = remaining& \ 10
+    end while
+    return result
+end function
+
+' ===================================================================
 ' GrowthBook hash function with seed and version support
 ' Supports v1 and v2 hash algorithms for consistent bucketing
 ' Returns value between 0 and 1
@@ -1094,7 +1120,7 @@ function GrowthBook__gbhash(seed as string, value as string, version as integer)
         ' Version 2: fnv1a32(str(fnv1a32(seed + value)))
         combined = seed + value
         hash1& = m._fnv1a32(combined)
-        hash2& = m._fnv1a32(Str(hash1&).Trim())
+        hash2& = m._fnv1a32(m._longToStr(hash1&))
         return (hash2& mod 10000) / 10000.0
     else if version = 1
         ' Version 1: fnv1a32(value + seed)
@@ -1813,3 +1839,61 @@ sub GrowthBookTrackingPlugin_flush()
     
     m.eventQueue = []
 end sub
+
+' ===================================================================
+' Sticky Bucket Services
+' ===================================================================
+
+' In-memory sticky bucket service (for testing/simple use)
+function GrowthBookInMemoryStickyBucketService() as object
+    return {
+        docs: {},
+        getAssignments: function(attrName as string, attrValue as string) as object
+            key = attrName + "||" + attrValue
+            return m.docs[key]
+        end function,
+        saveAssignments: sub(attrName as string, attrValue as string, assignments as object)
+            key = attrName + "||" + attrValue
+            m.docs[key] = {
+                attributeName: attrName,
+                attributeValue: attrValue,
+                assignments: assignments
+            }
+        end sub,
+        getAllAssignments: function(attributes as object) as object
+            return m.docs
+        end function
+    }
+end function
+
+' Registry-based persistent sticky bucket service (Roku OS 7.0+)
+function GrowthBookRegistryStickyBucketService() as object
+    return {
+        section: CreateObject("roRegistrySection", "GrowthBookStickyBuckets"),
+        getAssignments: function(attrName as string, attrValue as string) as object
+            key = attrName + "||" + attrValue
+            value = m.section.Read(key)
+            if value <> "" then return ParseJson(value)
+            return invalid
+        end function,
+        saveAssignments: sub(attrName as string, attrValue as string, assignments as object)
+            key = attrName + "||" + attrValue
+            doc = {
+                attributeName: attrName,
+                attributeValue: attrValue,
+                assignments: assignments
+            }
+            m.section.Write(key, FormatJson(doc))
+            m.section.Flush()
+        end sub,
+        getAllAssignments: function(attributes as object) as object
+            result = {}
+            keys = m.section.GetKeyList()
+            for each key in keys
+                value = m.section.Read(key)
+                if value <> "" then result[key] = ParseJson(value)
+            end for
+            return result
+        end function
+    }
+end function
