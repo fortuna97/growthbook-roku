@@ -65,6 +65,9 @@ function GrowthBook(config as object) as object
         _hashAttribute: GrowthBook__hashAttribute,
         _decrypt: GrowthBook__decrypt,
         _notifyPlugins: GrowthBook__notifyPlugins,
+        _getStickyBucketExperimentKey: GrowthBook__getStickyBucketExperimentKey,
+        _getStickyBucketVariation: GrowthBook__getStickyBucketVariation,
+        _saveStickyBucketAssignment: GrowthBook__saveStickyBucketAssignment,
         
         ' Public API
         registerTrackingPlugin: GrowthBook_registerTrackingPlugin,
@@ -536,34 +539,50 @@ function GrowthBook__evaluateExperiment(rule as object, result as object) as obj
     context = m._getHashContext(rule, result.key)
     if not context.success then return result
     
-    ' Get coverage (defaults to 1.0 = 100%)
-    coverage = 1.0
-    if rule.coverage <> invalid then coverage = rule.coverage
-    
-    ' Calculate hash with seed (returns 0-1)
-    n = m._gbhash(context.seed, context.hashValue, context.hashVersion)
-    if n = invalid
+    ' Check for sticky bucket FIRST (before hash-based assignment)
+    stickyResult = m._getStickyBucketVariation(rule, context, result.key)
+    if stickyResult.versionIsBlocked
+        m._log("Sticky bucket version blocked for experiment")
         return result
     end if
     
-    ' Use provided ranges if available, otherwise calculate from coverage/weights
-    ranges = rule.ranges
-    if ranges = invalid
-        ' Get weights from rule level
-        weights = rule.weights
-        
-        ' Get bucket ranges using coverage and weights
-        ranges = m._getBucketRanges(rule.variations.Count(), coverage, weights)
-    end if
+    variationIndex = -1
+    stickyBucketUsed = false
     
-    ' Choose variation based on hash and bucket ranges
-    variationIndex = m._chooseVariation(n, ranges)
-    m._log("Variation selected: " + Str(variationIndex).Trim() + " (hash=" + Str(n).Trim() + ")")
+    if stickyResult.variation >= 0
+        ' Use sticky bucket assignment
+        variationIndex = stickyResult.variation
+        stickyBucketUsed = true
+        m._log("Using sticky bucket: variation " + Str(variationIndex).Trim())
+    else
+        ' Normal hash-based assignment
+        ' Get coverage (defaults to 1.0 = 100%)
+        coverage = 1.0
+        if rule.coverage <> invalid then coverage = rule.coverage
+        
+        ' Calculate hash with seed (returns 0-1)
+        n = m._gbhash(context.seed, context.hashValue, context.hashVersion)
+        if n = invalid then return result
+        
+        ' Use provided ranges if available, otherwise calculate from coverage/weights
+        ranges = rule.ranges
+        if ranges = invalid
+            weights = rule.weights
+            ranges = m._getBucketRanges(rule.variations.Count(), coverage, weights)
+        end if
+        
+        ' Choose variation based on hash and bucket ranges
+        variationIndex = m._chooseVariation(n, ranges)
+        m._log("Variation selected: " + Str(variationIndex).Trim() + " (hash=" + Str(n).Trim() + ")")
+    end if
     
     ' If no variation found (user outside buckets), return default
     if variationIndex < 0
         return result
     end if
+    
+    ' Save to sticky bucket (even if we used it, to ensure doc exists)
+    m._saveStickyBucketAssignment(rule, context, variationIndex, result.key)
     
     ' User is assigned to a variation
     result.value = rule.variations[variationIndex]
@@ -571,6 +590,7 @@ function GrowthBook__evaluateExperiment(rule as object, result as object) as obj
     result.off = not result.on
     result.variationId = variationIndex
     result.source = "experiment"
+    result.stickyBucketUsed = stickyBucketUsed
     
     if rule.ruleId <> invalid 
         result.ruleId = rule.ruleId
@@ -1838,6 +1858,141 @@ sub GrowthBookTrackingPlugin_flush()
     m.http.AsyncPostFromString(payload)
     
     m.eventQueue = []
+end sub
+
+' ===================================================================
+' Sticky Bucket Logic
+' ===================================================================
+
+' Build the sticky bucket experiment key: "expKey__bucketVersion"
+function GrowthBook__getStickyBucketExperimentKey(expKey as string, bucketVersion as integer) as string
+    return expKey + "__" + Str(bucketVersion).Trim()
+end function
+
+' Look up sticky bucket variation from cached assignment docs
+' Checks both hashAttribute (higher priority) and fallbackAttribute (lower priority)
+' Returns { variation: integer, versionIsBlocked: boolean }
+function GrowthBook__getStickyBucketVariation(rule as object, context as object, featureKey as string) as object
+    result = { variation: -1, versionIsBlocked: false }
+    
+    if m.stickyBucketService = invalid then return result
+    if rule.disableStickyBucketing = true then return result
+    
+    ' Determine the experiment key
+    expKey = rule.key
+    if expKey = invalid or expKey = "" then expKey = featureKey
+    
+    bucketVersion = 0
+    if rule.bucketVersion <> invalid then bucketVersion = rule.bucketVersion
+    minBucketVersion = 0
+    if rule.minBucketVersion <> invalid then minBucketVersion = rule.minBucketVersion
+    
+    ' Merge assignments from fallback (lower priority) and hash (higher priority)
+    mergedAssignments = {}
+    
+    ' 1. Check fallbackAttribute first (lower priority)
+    if rule.fallbackAttribute <> invalid and rule.fallbackAttribute <> ""
+        fallbackVal = m._getAttributeValue(rule.fallbackAttribute)
+        if fallbackVal <> invalid
+            if type(fallbackVal) <> "roString" and type(fallbackVal) <> "String"
+                fallbackVal = Str(fallbackVal).Trim()
+            end if
+            if fallbackVal <> ""
+                fallbackKey = rule.fallbackAttribute + "||" + fallbackVal
+                fallbackDoc = m._stickyBucketAssignmentDocs[fallbackKey]
+                if fallbackDoc <> invalid and fallbackDoc.assignments <> invalid
+                    for each k in fallbackDoc.assignments
+                        mergedAssignments[k] = fallbackDoc.assignments[k]
+                    end for
+                end if
+            end if
+        end if
+    end if
+    
+    ' 2. Check hashAttribute (higher priority - overwrites fallback)
+    hashAttr = "id"
+    if rule.hashAttribute <> invalid and rule.hashAttribute <> ""
+        hashAttr = rule.hashAttribute
+    end if
+    hashVal = m._getAttributeValue(hashAttr)
+    if hashVal <> invalid
+        if type(hashVal) <> "roString" and type(hashVal) <> "String"
+            hashVal = Str(hashVal).Trim()
+        end if
+        if hashVal <> ""
+            hashKey = hashAttr + "||" + hashVal
+            hashDoc = m._stickyBucketAssignmentDocs[hashKey]
+            if hashDoc <> invalid and hashDoc.assignments <> invalid
+                for each k in hashDoc.assignments
+                    mergedAssignments[k] = hashDoc.assignments[k]
+                end for
+            end if
+        end if
+    end if
+    
+    if mergedAssignments.Count() = 0 then return result
+    
+    ' Check for blocked versions
+    ' If any version < minBucketVersion has an assignment, user is blocked
+    for v = 0 to minBucketVersion - 1
+        vKey = m._getStickyBucketExperimentKey(expKey, v)
+        if mergedAssignments.DoesExist(vKey)
+            result.versionIsBlocked = true
+            return result
+        end if
+    end for
+    
+    ' Look for current version assignment
+    currentKey = m._getStickyBucketExperimentKey(expKey, bucketVersion)
+    if mergedAssignments.DoesExist(currentKey)
+        result.variation = Int(Val(mergedAssignments[currentKey]))
+    end if
+    
+    return result
+end function
+
+' Save sticky bucket assignment to both in-memory cache and service
+' Saves under context.hashAttribute (the resolved attribute from _getHashContext)
+sub GrowthBook__saveStickyBucketAssignment(rule as object, context as object, variationIndex as integer, featureKey as string)
+    if m.stickyBucketService = invalid then return
+    if rule.disableStickyBucketing = true then return
+    
+    expKey = rule.key
+    if expKey = invalid or expKey = "" then expKey = featureKey
+    
+    bucketVersion = 0
+    if rule.bucketVersion <> invalid then bucketVersion = rule.bucketVersion
+    
+    assignmentKey = m._getStickyBucketExperimentKey(expKey, bucketVersion)
+    docKey = context.hashAttribute + "||" + context.hashValue
+    newValue = Str(variationIndex).Trim()
+    
+    ' Get existing doc from cache or start fresh
+    existing = m._stickyBucketAssignmentDocs[docKey]
+    assignments = {}
+    if existing <> invalid and existing.assignments <> invalid
+        for each k in existing.assignments
+            assignments[k] = existing.assignments[k]
+        end for
+    end if
+    
+    ' Skip save if assignment already matches
+    if assignments.DoesExist(assignmentKey) and assignments[assignmentKey] = newValue
+        return
+    end if
+    
+    ' Add/update the assignment
+    assignments[assignmentKey] = newValue
+    
+    ' Update in-memory cache
+    m._stickyBucketAssignmentDocs[docKey] = {
+        attributeName: context.hashAttribute,
+        attributeValue: context.hashValue,
+        assignments: assignments
+    }
+    
+    ' Persist to service
+    m.stickyBucketService.saveAssignments(context.hashAttribute, context.hashValue, assignments)
 end sub
 
 ' ===================================================================
