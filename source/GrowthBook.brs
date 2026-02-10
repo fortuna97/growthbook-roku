@@ -1749,28 +1749,35 @@ function GrowthBook__decrypt(encryptedStr as string, keyStr as string) as string
         return ""
     end if
     
-    ' Setup: false=decrypt, aes-128-cbc algorithm, key, iv, padding=1 (PKCS7)
-    if not cipher.Setup(false, "aes-128-cbc", keyBytes, ivBytes, 1)
-        m._log("ERROR: Cipher setup failed")
+    ' Cipher operations wrapped in try/catch for platform compatibility
+    ' (brs-engine's roEVPCipher expects String args; real Roku accepts roByteArray)
+    try
+        ' Setup: false=decrypt, aes-128-cbc algorithm, key, iv, padding=1 (PKCS7)
+        if not cipher.Setup(false, "aes-128-cbc", keyBytes, ivBytes, 1)
+            m._log("ERROR: Cipher setup failed")
+            return ""
+        end if
+        
+        ' Process the encrypted data
+        decrypted = cipher.Process(ctBytes)
+        if decrypted = invalid
+            m._log("ERROR: Decryption failed")
+            return ""
+        end if
+        
+        ' Get final block (handles PKCS7 padding removal)
+        finalBlock = cipher.Final()
+        if finalBlock <> invalid and finalBlock.Count() > 0
+            decrypted.Append(finalBlock)
+        end if
+        
+        if decrypted.Count() = 0 then return ""
+        
+        return decrypted.ToAsciiString()
+    catch e
+        m._log("ERROR: Cipher operation failed - " + e.message)
         return ""
-    end if
-    
-    ' Process the encrypted data
-    decrypted = cipher.Process(ctBytes)
-    if decrypted = invalid
-        m._log("ERROR: Decryption failed")
-        return ""
-    end if
-    
-    ' Get final block (handles PKCS7 padding removal)
-    finalBlock = cipher.Final()
-    if finalBlock <> invalid and finalBlock.Count() > 0
-        decrypted.Append(finalBlock)
-    end if
-    
-    if decrypted.Count() = 0 then return ""
-    
-    return decrypted.ToAsciiString()
+    end try
 end function
 
 ' ===================================================================

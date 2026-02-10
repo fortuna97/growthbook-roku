@@ -32,7 +32,9 @@ function GrowthBookTestRunner() as object
         _runGetBucketRangeTest: GrowthBookTestRunner_runGetBucketRangeTest,
         _runChooseVariationTest: GrowthBookTestRunner_runChooseVariationTest,
         _runFeatureTest: GrowthBookTestRunner_runFeatureTest,
-        _runExperimentTest: GrowthBookTestRunner_runExperimentTest
+        _runExperimentTest: GrowthBookTestRunner_runExperimentTest,
+        _runDecryptTest: GrowthBookTestRunner_runDecryptTest,
+        _runStickyBucketTest: GrowthBookTestRunner_runStickyBucketTest
     }
     
     return instance
@@ -73,8 +75,7 @@ function GrowthBookTestRunner_runAllTests() as object
         return m.results
     end if
     
-    ' Categories to test (excluding stickyBucket and decrypt for now)
-    categories = ["evalCondition", "hash", "getBucketRange", "chooseVariation", "feature", "run"]
+    categories = ["evalCondition", "hash", "getBucketRange", "chooseVariation", "feature", "run", "decrypt", "stickyBucket"]
     
     for each category in categories
         if m.cases[category] <> invalid
@@ -175,6 +176,10 @@ function GrowthBookTestRunner_runSingleTest(category as string, test as object) 
         return m._runFeatureTest(test)
     else if category = "run"
         return m._runExperimentTest(test)
+    else if category = "decrypt"
+        return m._runDecryptTest(test)
+    else if category = "stickyBucket"
+        return m._runStickyBucketTest(test)
     else
         return { status: "skipped", name: "unknown category" }
     end if
@@ -386,9 +391,155 @@ end function
 ' run (experiment): [name, context, experiment, value, inExperiment, hashUsed]
 function GrowthBookTestRunner_runExperimentTest(test as object) as object
     testName = test[0]
-    ' Note: "run" tests evaluate experiments differently
-    ' Skipping for now - feature tests cover most experiment logic
+    ' Note: "run" tests evaluate standalone experiments with features like
+    ' qaMode, url, enabled, active which are not part of feature-flag evaluation.
+    ' Skipping for now - feature tests cover most experiment logic.
     return { status: "skipped", name: testName + " (run tests not yet implemented)" }
+end function
+
+' decrypt: [name, encryptedString, key, expected]
+function GrowthBookTestRunner_runDecryptTest(test as object) as object
+    testName = test[0]
+    encryptedStr = test[1]
+    keyStr = test[2]
+    expected = test[3]
+    
+    ' Create GrowthBook instance
+    gb = GrowthBook({http: {}})
+    
+    ' Check if roEVPCipher is available and fully functional
+    cipher = CreateObject("roEVPCipher")
+    if cipher = invalid
+        return { status: "skipped", name: testName + " (roEVPCipher not available)" }
+    end if
+    
+    ' Probe: verify cipher.Setup() accepts roByteArray args (real Roku API)
+    ' brs-engine implements roEVPCipher but expects String args, causing type mismatch
+    probeKey = CreateObject("roByteArray")
+    probeKey.FromHexString("00000000000000000000000000000000")
+    try
+        cipher.Setup(true, "aes-128-cbc", probeKey, probeKey, 1)
+    catch e
+        return { status: "skipped", name: testName + " (roEVPCipher does not support roByteArray)" }
+    end try
+    
+    ' Run decrypt
+    actual = gb._decrypt(encryptedStr, keyStr)
+    
+    ' Compare: expected null means error (decrypt returns "")
+    ' expected string means successful decryption
+    if expected = invalid
+        ' Error case: decrypt should return empty string
+        if actual = ""
+            return { status: "passed", name: testName }
+        else
+            return { status: "failed", name: testName, expected: "null (empty)", actual: actual }
+        end if
+    else
+        ' Success case: compare decrypted text
+        if actual = expected
+            return { status: "passed", name: testName }
+        else
+            return { status: "failed", name: testName, expected: expected, actual: actual }
+        end if
+    end if
+end function
+
+' stickyBucket: [name, context, initialDocs, featureKey, expectedResult, expectedAssignmentDocs]
+function GrowthBookTestRunner_runStickyBucketTest(test as object) as object
+    testName = test[0]
+    context = test[1]
+    initialDocs = test[2]
+    featureKey = test[3]
+    expectedResult = test[4]
+    expectedAssignmentDocs = test[5]
+    
+    ' Build config from context
+    config = { http: {} }
+    if context.attributes <> invalid then config.attributes = context.attributes
+    if context.features <> invalid then config.features = context.features
+    if context.forcedVariations <> invalid then config.forcedVariations = context.forcedVariations
+    if context.savedGroups <> invalid then config.savedGroups = context.savedGroups
+    
+    ' Create in-memory sticky bucket service
+    stickyService = GrowthBookInMemoryStickyBucketService()
+    config.stickyBucketService = stickyService
+    
+    ' Build the assignment docs cache
+    ' Start with any docs from context
+    assignmentDocs = {}
+    if context.stickyBucketAssignmentDocs <> invalid
+        for each key in context.stickyBucketAssignmentDocs
+            assignmentDocs[key] = context.stickyBucketAssignmentDocs[key]
+        end for
+    end if
+    
+    ' Load initial docs into service; only cache docs matching user's attributes
+    if initialDocs <> invalid
+        for each doc in initialDocs
+            if doc.attributeName <> invalid and doc.attributeValue <> invalid
+                docKey = doc.attributeName + "||" + doc.attributeValue
+                stickyService.saveAssignments(doc.attributeName, doc.attributeValue, doc.assignments)
+                ' Only cache if user has this attribute with matching value
+                if context.attributes <> invalid
+                    userVal = context.attributes[doc.attributeName]
+                    if userVal <> invalid
+                        userValStr = ""
+                        if type(userVal) = "roString" or type(userVal) = "String"
+                            userValStr = userVal
+                        else
+                            userValStr = Str(userVal).Trim()
+                        end if
+                        if userValStr = doc.attributeValue
+                            assignmentDocs[docKey] = doc
+                        end if
+                    end if
+                end if
+            end if
+        end for
+    end if
+    
+    config.stickyBucketAssignmentDocs = assignmentDocs
+    
+    ' Create GrowthBook instance
+    gb = GrowthBook(config)
+    gb.init()
+    
+    ' Evaluate feature
+    actual = gb.evalFeature(featureKey)
+    
+    ' Compare result
+    isMatch = true
+    
+    if expectedResult = invalid
+        ' null expected = no experiment assignment (blocked or excluded)
+        if actual.source = "experiment" then isMatch = false
+    else
+        ' Check value
+        if not deepEqual(actual.value, expectedResult.value) then isMatch = false
+        ' Check stickyBucketUsed
+        if expectedResult.stickyBucketUsed <> invalid
+            if actual.stickyBucketUsed <> expectedResult.stickyBucketUsed then isMatch = false
+        end if
+        ' Check variationId
+        if expectedResult.variationId <> invalid
+            if actual.variationId <> expectedResult.variationId then isMatch = false
+        end if
+    end if
+    
+    ' Compare assignment docs after evaluation
+    if isMatch and expectedAssignmentDocs <> invalid
+        actualDocs = gb._stickyBucketAssignmentDocs
+        if not deepEqual(actualDocs, expectedAssignmentDocs)
+            isMatch = false
+        end if
+    end if
+    
+    if isMatch
+        return { status: "passed", name: testName }
+    else
+        return { status: "failed", name: testName, expected: expectedResult, actual: actual }
+    end if
 end function
 
 ' ================================================================
