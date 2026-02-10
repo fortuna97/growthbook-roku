@@ -2,6 +2,32 @@
 
 All notable changes to the GrowthBook Roku SDK.
 
+## [2.0.0] - 2026-02-10
+
+### Added
+- **Encrypted Features** - AES-128-CBC decryption for encrypted feature payloads (`roEVPCipher`, Roku OS 9.2+)
+  - Supports `encryptedFeatures` and `encryptedSavedGroups` in API responses
+  - Configure with `decryptionKey` option
+- **Sticky Bucketing** - Persistent experiment assignments across sessions
+  - `GrowthBookInMemoryStickyBucketService()` for testing and simple use
+  - `GrowthBookRegistryStickyBucketService()` for persistent storage via `roRegistrySection`
+  - Supports `fallbackAttribute` for anonymous-to-logged-in user transitions
+  - Version blocking via `minBucketVersion` and `bucketVersion`
+- **Tracking Plugin System** - Extensible plugin architecture for event tracking
+  - `registerTrackingPlugin()` to add plugins at runtime
+  - Plugins receive `onExperimentViewed` and `onFeatureUsage` events
+  - Built-in `GrowthBookTrackingPlugin` for data warehouse integration with batched HTTP delivery
+- **Refresh Features API** - On-demand feature updates via `refreshFeatures()`
+- **Fallback Attribute Support** - `fallbackAttribute` in hash context for sticky bucketing prerequisites
+- **Decrypt & Sticky Bucket Test Coverage** - Both test runners (BrightScript + JS validator) now cover all spec categories
+  - 327/327 spec tests passing (100%)
+
+### Improved
+- **Platform Compatibility** - Cipher operations wrapped in try/catch for cross-platform resilience
+- **Feature Parsing** - `_parseFeatures()` now handles encrypted payloads, encrypted saved groups, and plain saved groups
+
+---
+
 ## [1.3.1] - 2026-02-03
 
 ### Changes

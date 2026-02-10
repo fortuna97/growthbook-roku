@@ -248,7 +248,6 @@ function GrowthBookTestRunner_runEvalConditionTest(test as object) as object
     ' Run test
     actual = gb._evaluateConditions(condition)
     
-    
     if actual = expected
         return { status: "passed", name: testName }
     else
@@ -414,7 +413,7 @@ function GrowthBookTestRunner_runDecryptTest(test as object) as object
     end if
     
     ' Probe: verify cipher.Setup() accepts roByteArray args (real Roku API)
-    ' brs-engine implements roEVPCipher but expects String args, causing type mismatch
+    ' Some environments implement roEVPCipher but expect String args instead of roByteArray
     probeKey = CreateObject("roByteArray")
     probeKey.FromHexString("00000000000000000000000000000000")
     try
@@ -559,6 +558,5 @@ function RunCasesJsonTests(casesPath as string) as object
         totalSkipped: runner.totalSkipped,
         results: runner.results
     }
-
 end function
 

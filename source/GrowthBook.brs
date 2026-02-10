@@ -133,11 +133,10 @@ function GrowthBook(config as object) as object
         end try
     end if
     
-    
     if instance.http <> invalid and type(instance.http) = "roURLTransfer"
         instance.http.SetCertificatesFile("common:/certs/ca-bundle.crt")
         instance.http.AddHeader("Content-Type", "application/json")
-        instance.http.AddHeader("User-Agent", "GrowthBook-Roku/1.3.0")
+        instance.http.AddHeader("User-Agent", "GrowthBook-Roku/2.0.0")
     end if
     
     return instance
@@ -1107,7 +1106,7 @@ end function
 
 ' ===================================================================
 ' Convert LongInteger to string without using Str()
-' Avoids brs-engine Str() coercing LongInteger to Float (32-bit),
+' Avoids Str() coercing LongInteger to Float (32-bit),
 ' which loses precision for values > 7 significant digits
 ' ===================================================================
 function GrowthBook__longToStr(val as longinteger) as string
@@ -1151,7 +1150,6 @@ function GrowthBook__gbhash(seed as string, value as string, version as integer)
     
     return invalid
 end function
-
 
 ' ===================================================================
 ' Version string padding for semantic version comparison
@@ -1750,7 +1748,7 @@ function GrowthBook__decrypt(encryptedStr as string, keyStr as string) as string
     end if
     
     ' Cipher operations wrapped in try/catch for platform compatibility
-    ' (brs-engine's roEVPCipher expects String args; real Roku accepts roByteArray)
+    ' (some environments may not support roByteArray args for roEVPCipher)
     try
         ' Setup: false=decrypt, aes-128-cbc algorithm, key, iv, padding=1 (PKCS7)
         if not cipher.Setup(false, "aes-128-cbc", keyBytes, ivBytes, 1)

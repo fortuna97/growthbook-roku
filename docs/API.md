@@ -1,11 +1,13 @@
 # GrowthBook Roku SDK - API Reference
 
-Complete API documentation for the GrowthBook Roku SDK.
+Complete API documentation for the GrowthBook Roku SDK v2.0.0.
 
 ## Table of Contents
 
 - [SDK Initialization](#sdk-initialization)
 - [Core Methods](#core-methods)
+- [Sticky Bucket Services](#sticky-bucket-services)
+- [Tracking Plugins](#tracking-plugins)
 - [Configuration Options](#configuration-options)
 - [Result Objects](#result-objects)
 - [Error Handling](#error-handling)
@@ -204,6 +206,166 @@ gb.setAttributes({
 
 ---
 
+### `refreshFeatures() as boolean`
+
+**New in v2.0.0** - Re-fetch features from the GrowthBook API.
+
+**Parameters:** None
+
+**Returns:**
+- `true` if features reloaded successfully
+- `false` if fetch failed
+
+**Behavior:**
+1. Calls the API using the same `apiHost` and `clientKey` from initialization
+2. Parses and decrypts the response (if `decryptionKey` is set)
+3. Replaces the in-memory feature definitions
+4. Loads sticky bucket assignments if service is configured
+
+**Example:**
+```brightscript
+' Refresh features on user navigation or timer
+if gb.refreshFeatures()
+    print "Features updated"
+end if
+```
+
+---
+
+### `registerTrackingPlugin(plugin as object) as void`
+
+**New in v2.0.0** - Register a tracking plugin to receive experiment and feature usage events.
+
+**Parameters:**
+- `plugin` (object) - A tracking plugin instance (must have `onExperimentViewed` and/or `onFeatureUsage` methods)
+
+**Returns:** Nothing
+
+**Behavior:**
+- Adds the plugin to the internal plugin registry
+- Plugin's `onExperimentViewed(experiment, result)` is called when a user is exposed to an experiment
+- Plugin's `onFeatureUsage(featureKey, result)` is called on each feature evaluation
+
+**Example:**
+```brightscript
+plugin = GrowthBookTrackingPlugin({
+    ingestorHost: "https://analytics.example.com",
+    clientKey: "sdk_YOUR_KEY",
+    batchSize: 10
+})
+gb.registerTrackingPlugin(plugin)
+```
+
+---
+
+## Sticky Bucket Services
+
+**New in v2.0.0** - Sticky bucketing persists experiment variation assignments so that users always see the same variation, even across sessions or after attribute changes (e.g., anonymous to logged-in transition).
+
+### `GrowthBookInMemoryStickyBucketService()`
+
+Creates an in-memory sticky bucket service. Assignments are stored in memory and lost when the app exits.
+
+**Use cases:**
+- Testing
+- Single-session persistence
+- Environments without `roRegistrySection`
+
+**Example:**
+```brightscript
+sbs = GrowthBookInMemoryStickyBucketService()
+gb = GrowthBook({
+    clientKey: "sdk_YOUR_KEY",
+    attributes: { id: "user-123" },
+    stickyBucketService: sbs
+})
+```
+
+### `GrowthBookRegistryStickyBucketService()`
+
+Creates a registry-based sticky bucket service. Assignments are persisted to `roRegistrySection` and survive app restarts.
+
+**Use cases:**
+- Production deployment
+- Cross-session persistence
+- Long-running channels
+
+**Example:**
+```brightscript
+sbs = GrowthBookRegistryStickyBucketService()
+gb = GrowthBook({
+    clientKey: "sdk_YOUR_KEY",
+    attributes: { id: "user-123" },
+    stickyBucketService: sbs
+})
+```
+
+### Sticky Bucket Service Interface
+
+Both services implement the same interface:
+
+| Method | Description |
+|--------|-------------|
+| `getAssignments(attributeName, attributeValue)` | Returns stored assignment doc for the given attribute |
+| `saveAssignments(attributeName, attributeValue, assignments)` | Persists an assignment doc |
+| `getAllAssignments(attributes)` | Returns all stored assignment docs for the given attributes |
+
+---
+
+## Tracking Plugins
+
+**New in v2.0.0** - Tracking plugins provide an extensible way to capture experiment exposure and feature usage events.
+
+### `GrowthBookTrackingPlugin(config)`
+
+Creates a built-in tracking plugin that sends batched events to an HTTP endpoint.
+
+**Parameters:**
+- `config` (object):
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `ingestorHost` | string | required | Base URL for the event ingestor (events POST to `<host>/events`) |
+| `clientKey` | string | `""` | Client key sent with event batches |
+| `batchSize` | integer | 10 | Number of events to batch before sending |
+
+**Example:**
+```brightscript
+plugin = GrowthBookTrackingPlugin({
+    ingestorHost: "https://analytics.example.com",
+    clientKey: "sdk_YOUR_KEY",
+    batchSize: 10
+})
+gb.registerTrackingPlugin(plugin)
+
+' Plugin methods called automatically:
+' plugin.onExperimentViewed(experiment, result)
+' plugin.onFeatureUsage(featureKey, result)
+```
+
+### Custom Tracking Plugin
+
+You can create a custom tracking plugin by implementing the expected methods:
+
+```brightscript
+function MyCustomPlugin() as object
+    return {
+        onExperimentViewed: sub(experiment as object, result as object)
+            ' Send to your analytics service
+            print "Experiment: " + experiment.key + " Variation: " + Str(result.variationId)
+        end sub,
+        onFeatureUsage: sub(featureKey as string, result as object)
+            ' Log feature usage
+            print "Feature: " + featureKey + " Value: " + Str(result.value)
+        end sub
+    }
+end function
+
+gb.registerTrackingPlugin(MyCustomPlugin())
+```
+
+---
+
 ## Configuration Options
 
 Pass configuration object to `GrowthBook()`:
@@ -215,6 +377,8 @@ config = {
     decryptionKey: "",
     attributes: { ... },
     trackingCallback: sub(experiment, result) ... end sub,
+    onFeatureUsage: sub(featureKey, result) ... end sub,
+    stickyBucketService: GrowthBookInMemoryStickyBucketService(),
     enableDevMode: false,
     features: { ... }
 }
@@ -289,7 +453,7 @@ end sub
 
 **Default:** `invalid`
 
-**New in v1.3.0** - Callback invoked every time a feature is evaluated.
+Callback invoked every time a feature is evaluated.
 
 ```brightscript
 config.onFeatureUsage = sub(featureKey, result)
@@ -301,6 +465,22 @@ end sub
 **Callback Parameters:**
 - `featureKey` (string) - The key of the feature being evaluated
 - `result` (object) - Evaluation result object
+
+### `stickyBucketService` (object, optional)
+
+**Default:** `invalid`
+
+**New in v2.0.0** - A sticky bucket service instance for persisting experiment assignments.
+
+```brightscript
+' In-memory (testing/single session)
+config.stickyBucketService = GrowthBookInMemoryStickyBucketService()
+
+' Registry-based (persistent across restarts)
+config.stickyBucketService = GrowthBookRegistryStickyBucketService()
+```
+
+See [Sticky Bucket Services](#sticky-bucket-services) for details.
 
 ### `enableDevMode` (boolean, optional)
 

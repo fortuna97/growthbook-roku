@@ -3,22 +3,25 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![BrightScript](https://img.shields.io/badge/BrightScript-2.0-purple.svg)](https://developer.roku.com/docs/references/brightscript/language/brightscript-language-reference.md)
 [![Roku](https://img.shields.io/badge/Roku-SceneGraph-6f3f9f.svg)](https://developer.roku.com/)
-[![Version](https://img.shields.io/badge/version-1.3.1-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)](CHANGELOG.md)
 [![Production Ready](https://img.shields.io/badge/status-production%20ready-green.svg)](docs/INTEGRATION_GUIDE.md)
 
 Official [GrowthBook](https://www.growthbook.io/) SDK for Roku/BrightScript applications. Add feature flags and A/B testing to your Roku channels with a simple, lightweight SDK.
 
-**Current Version:** v1.3.1 — [View Changelog](CHANGELOG.md) | [Integration Guide](docs/INTEGRATION_GUIDE.md) | [Quick Start](docs/QUICKSTART.md)
+**Current Version:** v2.0.0 — [View Changelog](CHANGELOG.md) | [Integration Guide](docs/INTEGRATION_GUIDE.md) | [Quick Start](docs/QUICKSTART.md)
 
 ## Features
 
 - 🚀 **Lightweight** - Core SDK is ~50KB, minimal memory footprint
 - ⚡ **Fast** - Feature evaluation in <1ms, optimized for Roku devices
-- 🎯 **Full Spec Alignment** - Supports v1.3.0 logic (filters, namespaces, ranges, and truthiness)
+- 🎯 **Full Spec Alignment** - 327/327 spec tests passing (evalCondition, hash, bucketing, features, decrypt, stickyBucket)
 - 🧪 **A/B Testing** - Run experiments with accurate traffic splits and holdout groups
 - 🔄 **Consistent Bucketing** - Same user always sees same variation (cross-platform)
-- 📊 **Analytics Ready** - Detailed experiment tracking and feature usage callbacks
-- 🔒 **Secure** - Support for encrypted feature payloads
+- 📊 **Analytics Ready** - Tracking callbacks, feature usage events, and plugin system
+- 🔒 **Encrypted Features** - AES-128-CBC decryption for secure feature payloads (Roku OS 9.2+)
+- 📌 **Sticky Bucketing** - Persistent experiment assignments with in-memory and registry-based storage
+- 🔌 **Tracking Plugins** - Extensible plugin architecture with built-in data warehouse integration
+- 🔃 **On-Demand Refresh** - Manual feature refresh via `refreshFeatures()`
 - 📦 **Ropm Support** - Easy dependency management via ropm
 - 🎨 **No Dependencies** - Pure BrightScript, works on all Roku devices (Roku 3+, OS 9.0+)
 
@@ -618,10 +621,11 @@ Then reference the SDK:
 |--------|------|-------------|
 | `apiHost` | string | GrowthBook API host (default: `https://cdn.growthbook.io`) |
 | `clientKey` | string | **Required** - Your SDK client key from GrowthBook |
-| `decryptionKey` | string | Optional - Decrypt encrypted feature payloads |
+| `decryptionKey` | string | Decrypt encrypted feature payloads (Roku OS 9.2+) |
 | `attributes` | object | User attributes for targeting (e.g., `{id: "user-123", premium: true}`) |
 | `trackingCallback` | function | Callback fired when user is placed in an experiment |
 | `onFeatureUsage` | function | Callback fired on every feature evaluation |
+| `stickyBucketService` | object | Sticky bucket storage service (in-memory or registry-based) |
 | `enableDevMode` | boolean | Enable verbose logging for debugging |
 
 ### Core Methods
@@ -667,6 +671,28 @@ gb.setAttributes({
 })
 ```
 
+#### `refreshFeatures() as boolean`
+
+Re-fetch features from the GrowthBook API. Useful for long-running apps.
+
+```brightscript
+if gb.refreshFeatures()
+    print "Features refreshed"
+end if
+```
+
+#### `registerTrackingPlugin(plugin as object)`
+
+Register a tracking plugin to receive experiment and feature usage events.
+
+```brightscript
+plugin = GrowthBookTrackingPlugin({
+    ingestorHost: "https://analytics.example.com",
+    clientKey: "sdk_YOUR_KEY"
+})
+gb.registerTrackingPlugin(plugin)
+```
+
 #### `evalFeature(featureKey as string) as object`
 
 Get detailed feature evaluation result.
@@ -681,15 +707,70 @@ print result.ruleId      ' ID of the matching rule
 
 ### Advanced Targeting
 
-The SDK version 1.3.1+ supports all GrowthBook advanced targeting rules:
+The SDK v2.0.0 supports all GrowthBook advanced targeting rules:
 
 - **Filters**: Complex user segmentation using hash-based filtering.
-- **Ranges (Intervals)**: Precise traffic control for experiments and rollouts (v1.1.0+).
+- **Ranges (Intervals)**: Precise traffic control for experiments and rollouts.
 - **Namespaces**: Mutually exclusive experiments to prevent overlap.
 - **Prerequisites**: Dependent feature flags (flag A requires flag B).
 - **Forced Variations**: Global variation overrides for testing.
+- **Sticky Bucketing**: Persistent variation assignments across sessions.
 
 These are handled automatically by the SDK based on your GrowthBook configuration.
+
+### Encrypted Features
+
+Decrypt encrypted feature payloads from the GrowthBook API. Requires Roku OS 9.2+.
+
+```brightscript
+gb = GrowthBook({
+    clientKey: "sdk_YOUR_KEY",
+    decryptionKey: "your-base64-decryption-key",
+    attributes: { id: "user-123" }
+})
+gb.init()  ' Encrypted features are decrypted automatically
+```
+
+### Sticky Bucketing
+
+Persist experiment assignments so users always see the same variation, even across sessions or after attribute changes.
+
+```brightscript
+' In-memory (for testing or single-session use)
+sbs = GrowthBookInMemoryStickyBucketService()
+
+' Registry-based (persists across app restarts)
+sbs = GrowthBookRegistryStickyBucketService()
+
+gb = GrowthBook({
+    clientKey: "sdk_YOUR_KEY",
+    attributes: { id: "user-123" },
+    stickyBucketService: sbs
+})
+gb.init()
+```
+
+### Tracking Plugins
+
+Register plugins to receive experiment and feature usage events. The built-in `GrowthBookTrackingPlugin` sends batched events to a configurable HTTP endpoint.
+
+```brightscript
+plugin = GrowthBookTrackingPlugin({
+    ingestorHost: "https://analytics.example.com",
+    clientKey: "sdk_YOUR_KEY",
+    batchSize: 10
+})
+
+gb = GrowthBook({
+    clientKey: "sdk_YOUR_KEY",
+    attributes: { id: "user-123" }
+})
+gb.init()
+gb.registerTrackingPlugin(plugin)
+
+' Events are batched and sent automatically
+if gb.isOn("new-feature") then doSomething()
+```
 
 ## Examples
 
@@ -769,8 +850,8 @@ Minimum Roku OS: 9.0+
 
 - No Server-Sent Events (SSE) streaming support (Roku limitation)
 - No Visual Editor experiments (SceneGraph only)
-- AES decryption requires `roEVPCipher` component (Roku OS 9.2+)
-- Network requests are asynchronous only
+- Encrypted features require `roEVPCipher` component (Roku OS 9.2+)
+- Network requests are synchronous (no background polling)
 
 ## Contributing
 
