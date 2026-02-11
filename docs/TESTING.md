@@ -23,13 +23,13 @@ node tests/validate-logic.js
 ### Current Results (v2.0.0)
 
 ```
-evalCondition:    220/221 (99.5%)
+evalCondition:    221/221 (100%)
 hash:             15/15  (100%)
 getBucketRange:   13/13  (100%)
 chooseVariation:  13/13  (100%)
 feature:          46/46  (100%)
-decrypt:          9/9    (100%)
-stickyBucket:     11/11  (100%)
+decrypt:          10/10  (100%)
+stickyBucket:     9/9    (100%)
 ──────────────────────────────────
 TOTAL: 327/327 tests passed (100%)
 ```
