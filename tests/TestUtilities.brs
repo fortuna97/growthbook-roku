@@ -79,6 +79,10 @@ function createGBFromSDKConfig(sdkConfig as object) as object
         config.savedGroups = sdkConfig.savedGroups
     end if
     
+    if sdkConfig.DoesExist("stickyBucketService")
+        config.stickyBucketService = sdkConfig.stickyBucketService
+    end if
+    
     gb = GrowthBook(config)
     gb.init()
     
