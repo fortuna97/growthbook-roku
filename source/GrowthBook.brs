@@ -902,11 +902,28 @@ function GrowthBook__evaluateConditions(condition as object) as boolean
                 if value = invalid or (type(value) <> "roString" and type(value) <> "String")
                     return false
                 end if
-                ' Use CreateObject("roRegex") for pattern matching
-                regex = CreateObject("roRegex", condition_value["$regex"], "i")
-                if regex = invalid or not regex.IsMatch(value)
+                pattern = condition_value["$regex"]
+                if type(pattern) <> "roString" and type(pattern) <> "String"
                     return false
                 end if
+                ' Reject patterns with invalid quantifier sequences (crashes roRegex)
+                firstChar = Left(pattern, 1)
+                if firstChar = "?" or firstChar = "*" or firstChar = "+"
+                    return false
+                end if
+                if Instr(1, pattern, "**") > 0 or Instr(1, pattern, "++") > 0 or Instr(1, pattern, "???") > 0
+                    return false
+                end if
+                ' Use CreateObject("roRegex") for pattern matching
+                try
+                    regex = CreateObject("roRegex", pattern, "i")
+                    if regex = invalid or not regex.IsMatch(value)
+                        return false
+                    end if
+                catch e
+                    ' Invalid regex pattern - fail the condition
+                    return false
+                end try
             end if
             if condition_value["$elemMatch"] <> invalid
                 ' Array element matching
