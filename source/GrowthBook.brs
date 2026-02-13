@@ -46,7 +46,6 @@ function GrowthBook(config as object) as object
         _evaluateConditions: GrowthBook__evaluateConditions,
         _getAttributeValue: GrowthBook__getAttributeValue,
         _fnv1a32: GrowthBook__fnv1a32,
-        _longToStr: GrowthBook__longToStr,
         _gbhash: GrowthBook__gbhash,
         _paddedVersionString: GrowthBook__paddedVersionString,
         _isIncludedInRollout: GrowthBook__isIncludedInRollout,
@@ -1122,23 +1121,6 @@ function GrowthBook__fnv1a32(str as string) as longinteger
 end function
 
 ' ===================================================================
-' Convert LongInteger to string without using Str()
-' Avoids Str() coercing LongInteger to Float (32-bit),
-' which loses precision for values > 7 significant digits
-' ===================================================================
-function GrowthBook__longToStr(val as longinteger) as string
-    if val = 0 then return "0"
-    result = ""
-    remaining& = val
-    while remaining& > 0
-        digit% = remaining& mod 10
-        result = Chr(48 + digit%) + result
-        remaining& = remaining& \ 10
-    end while
-    return result
-end function
-
-' ===================================================================
 ' GrowthBook hash function with seed and version support
 ' Supports v1 and v2 hash algorithms for consistent bucketing
 ' Returns value between 0 and 1
@@ -1156,7 +1138,7 @@ function GrowthBook__gbhash(seed as string, value as string, version as integer)
         ' Version 2: fnv1a32(str(fnv1a32(seed + value)))
         combined = seed + value
         hash1& = m._fnv1a32(combined)
-        hash2& = m._fnv1a32(m._longToStr(hash1&))
+        hash2& = m._fnv1a32(Str(hash1&).Trim())
         return (hash2& mod 10000) / 10000.0
     else if version = 1
         ' Version 1: fnv1a32(value + seed)
