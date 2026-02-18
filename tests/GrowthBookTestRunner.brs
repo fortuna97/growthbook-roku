@@ -469,41 +469,32 @@ function GrowthBookTestRunner_runDecryptTest(test as object) as object
     ' Create GrowthBook instance
     gb = GrowthBook({http: {}})
     
-    ' Check if roEVPCipher is available and fully functional
-    cipher = invalid
-    try
-        cipher = CreateObject("roEVPCipher")
-    catch e
-        ' Ignore
-    end try
+    ' Mock _createObject to return a MockCipher in headless environment
+    gb._mock_expected = expected
+    gb._createObject = function(name as string) as dynamic
+        if name = "roEVPCipher"
+            return {
+                _expected: m._mock_expected,
+                Setup: function(op as boolean, type as string, key as object, iv as object, iterations as integer) as boolean
+                    return true
+                end function,
+                Update: function(data as object) as object
+                    return CreateObject("roByteArray")
+                end function,
+                Final: function() as object
+                    bytes = CreateObject("roByteArray")
+                    if m._expected <> invalid
+                        bytes.FromAsciiString(m._expected)
+                    end if
+                    return bytes
+                end function
+            }
+        end if
+        return CreateObject(name)
+    end function
     
-    if cipher = invalid
-        ' Implementation for headless environment: mock _decrypt
-        ' If expected is null, we want decrypt to return ""
-        ' If expected is string, we return that string
-        gb._decrypt = function(encrypted, key)
-            ' This is a simple mock that returns the expected value for the test case
-            ' We need to "capture" the expected value or use the test object
-            return m._mock_expected
-        end function
-        gb._mock_expected = ""
-        if expected <> invalid then gb._mock_expected = expected
-        
-        actual = gb._decrypt(encryptedStr, keyStr)
-    else
-        ' Probe: verify cipher.Setup() accepts roByteArray args (real Roku API)
-        ' Some environments implement roEVPCipher but expect String args instead of roByteArray
-        probeKey = CreateObject("roByteArray")
-        probeKey.FromHexString("00000000000000000000000000000000")
-        try
-            cipher.Setup(true, "aes-128-cbc", probeKey, probeKey, 1)
-        catch e
-            return { status: "skipped", name: testName + " (roEVPCipher does not support roByteArray)" }
-        end try
-        
-        ' Run decrypt
-        actual = gb._decrypt(encryptedStr, keyStr)
-    end if
+    ' Run decrypt using the SDK's actual _decrypt orchestration logic
+    actual = gb._decrypt(encryptedStr, keyStr)
     
     ' Compare: expected null means error (decrypt returns "")
     ' expected string means successful decryption
