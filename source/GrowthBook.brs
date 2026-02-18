@@ -1073,7 +1073,7 @@ function GrowthBook__evaluateConditions(condition as object) as boolean
                 end if
                 ' Use CreateObject("roRegex") for pattern matching
                 try
-                    regex = CreateObject("roRegex", pattern, "i")
+                    regex = CreateObject("roRegex", pattern, "")
                     if regex = invalid or not regex.IsMatch(value)
                         return false
                     end if
@@ -1643,7 +1643,7 @@ function GrowthBook__inNamespace(userId as string, namespace as object) as boole
         return true
     end if
     
-    n = m._gbhash(namespace[0], userId, 1)
+    n = m._gbhash("__" + namespace[0], userId, 1)
     if n = invalid then return false
     
     res = (n >= namespace[1] and n < namespace[2])
