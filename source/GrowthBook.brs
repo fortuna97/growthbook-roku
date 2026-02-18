@@ -70,6 +70,9 @@ function GrowthBook(config as object) as object
         _getStickyBucketExperimentKey: GrowthBook__getStickyBucketExperimentKey,
         _getStickyBucketVariation: GrowthBook__getStickyBucketVariation,
         _saveStickyBucketAssignment: GrowthBook__saveStickyBucketAssignment,
+        _createObject: function(name as string) as dynamic
+            return CreateObject(name)
+        end function,
         
         ' Public API
         registerTrackingPlugin: GrowthBook_registerTrackingPlugin,
@@ -1934,27 +1937,25 @@ function GrowthBook__decrypt(encryptedStr as string, keyStr as string) as string
         return ""
     end if
     
-    ' IV must be 16 bytes (block size)
-    if ivBytes.Count() <> 16
-        m._log("ERROR: IV must be 16 bytes")
+    ' IV must be non-empty
+    if ivBytes.Count() = 0
+        m._log("ERROR: IV must be non-empty")
         return ""
     end if
     
-    ' Ciphertext must be non-empty and multiple of block size
-    if ctBytes.Count() = 0 or ctBytes.Count() mod 16 <> 0
+    ' Ciphertext must be non-empty
+    if ctBytes.Count() = 0
         m._log("ERROR: Invalid ciphertext length")
         return ""
     end if
     
     ' Create cipher (requires Roku OS 9.2+)
-    cipher = CreateObject("roEVPCipher")
+    cipher = m._createObject("roEVPCipher")
     if cipher = invalid
         m._log("ERROR: roEVPCipher not available (requires Roku OS 9.2+)")
         return ""
     end if
     
-    ' Cipher operations wrapped in try/catch for platform compatibility
-    ' (some environments may not support roByteArray args for roEVPCipher)
     try
         ' Setup: false=decrypt, aes-128-cbc algorithm, key, iv, padding=1 (PKCS7)
         if not cipher.Setup(false, "aes-128-cbc", keyBytes, ivBytes, 1)
@@ -1963,7 +1964,7 @@ function GrowthBook__decrypt(encryptedStr as string, keyStr as string) as string
         end if
         
         ' Process the encrypted data
-        decrypted = cipher.Process(ctBytes)
+        decrypted = cipher.Update(ctBytes)
         if decrypted = invalid
             m._log("ERROR: Decryption failed")
             return ""
@@ -1974,8 +1975,6 @@ function GrowthBook__decrypt(encryptedStr as string, keyStr as string) as string
         if finalBlock <> invalid and finalBlock.Count() > 0
             decrypted.Append(finalBlock)
         end if
-        
-        if decrypted.Count() = 0 then return ""
         
         return decrypted.ToAsciiString()
     catch e
