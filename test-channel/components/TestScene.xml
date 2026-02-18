@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<component name="TestScene" extends="Scene">
+
+  <interface>
+    <function name="displayResults" />
+  </interface>
+
+  <children>
+    <Rectangle id="background" color="0x000000FF" width="1280" height="720" />
+    
+    <Label id="titleLabel" 
+           text="GrowthBook SDK Test Runner" 
+           font="font:LargeBoldSystemFont"
+           color="0xFFFFFFFF"
+           translation="[640, 100]"
+           horizAlign="center" />
+           
+    <Label id="statusLabel" 
+           text="Initializing tests..." 
+           font="font:MediumSystemFont"
+           color="0x00FF00FF"
+           translation="[640, 200]"
+           horizAlign="center" />
+           
+    <Label id="resultsLabel" 
+           text="" 
+           font="font:SmallSystemFont"
+           color="0xFFFFFFFF"
+           translation="[50, 300]"
+           width="1180"
+           height="350"
+           wrap="true" />
+  </children>
+
+  <script type="text/brightscript" uri="pkg:/components/TestScene.brs" />
+
+</component>

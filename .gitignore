@@ -35,5 +35,8 @@ out.zip
 # Generated test entry point (created/deleted by run-native.js)
 tests/test-entry.brs
 
-# Test Channel (run locally with brs-desktop, not committed)
-test-channel/
+# Test Channel - files copied by `npm run test:channel`
+test-channel/source/GrowthBook.brs
+test-channel/source/cases.json
+test-channel/source/GrowthBookTestRunner.brs
+test-channel/source/TestUtilities.brs
