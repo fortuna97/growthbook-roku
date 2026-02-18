@@ -17,6 +17,8 @@ function GrowthBook(config as object) as object
         trackingCallback: invalid,
         onFeatureUsage: invalid,
         enableDevMode: false,
+        enabled: true,
+        qaMode: false,
         forcedVariations: {},
         
         ' Internal state
@@ -99,6 +101,12 @@ function GrowthBook(config as object) as object
         if config.enableDevMode <> invalid
             instance.enableDevMode = config.enableDevMode
         end if
+        if config.enabled <> invalid
+            instance.enabled = config.enabled
+        end if
+        if config.qaMode <> invalid
+            instance.qaMode = config.qaMode
+        end if
         if config.features <> invalid
             instance.cachedFeatures = config.features
             instance.isInitialized = true
@@ -108,6 +116,37 @@ function GrowthBook(config as object) as object
         end if
         if config.forcedVariations <> invalid
             instance.forcedVariations = config.forcedVariations
+        end if
+        ' Parse URL for forced variations (e.g. ?my-experiment=1)
+        if config.url <> invalid
+            ' content.url might be available
+            qs = ""
+            urlParts = config.url.Split("?")
+            if urlParts.Count() > 1
+                qs = urlParts[1]
+                ' Remove anchor if present
+                anchorParts = qs.Split("#")
+                if anchorParts.Count() > 0 then qs = anchorParts[0]
+                
+                ' Parse query string
+                pairs = qs.Split("&")
+                for each pair in pairs
+                    kv = pair.Split("=")
+                    if kv.Count() = 2
+                        key = kv[0]
+                        ' Decode URI component if needed? standard generic parsing usually enough for simple keys
+                        ' Check if value is integer
+                        valStr = kv[1]
+                        valInt = Val(valStr) 
+                        ' Val() returns 0 if not a number, but "0" is also 0. 
+                        ' Valid variations are integers.
+                        ' We need to know if it's a valid integer string.
+                        ' Regex check or just permissive Val()
+                        ' GrowthBook spec: value should be index of variation
+                        instance.forcedVariations[key] = valInt
+                    end if
+                end for
+            end if
         end if
         if config.trackingPlugins <> invalid
             instance.trackingPlugins = config.trackingPlugins
@@ -366,7 +405,8 @@ function GrowthBook_evalFeature(key as string) as object
         source: "unknownFeature",
         ruleId: "",
         experimentId: "",
-        variationId: invalid
+        variationId: -1,
+        stickyBucketUsed: false
     }
     
     ' Check for cyclic prerequisites
@@ -466,25 +506,6 @@ function GrowthBook_evalFeature(key as string) as object
                         
                         ' 4. Experiment Rule
                         if rule.variations <> invalid
-                            ' Forced Variations check
-                            if m.forcedVariations <> invalid and m.forcedVariations[key] <> invalid
-                                forcedIndex = m.forcedVariations[key]
-                                if forcedIndex >= 0 and forcedIndex < rule.variations.Count()
-                                    result.value = rule.variations[forcedIndex]
-                                    result.on = GrowthBook_toBoolean(result.value)
-                                    result.off = not result.on
-                                    result.source = "experiment"
-                                    if rule.ruleId <> invalid 
-                                        result.ruleId = rule.ruleId
-                                    else if rule.id <> invalid
-                                        result.ruleId = rule.id
-                                    end if
-                                    m._evaluationStack.Pop()
-                                    m._trackFeatureUsage(key, result)
-                                    return result
-                                end if
-                            end if
-                            
                             expResult = m._evaluateExperiment(rule, result)
                             if expResult.source = "experiment"
                                 ' Check for passthrough meta
@@ -530,82 +551,215 @@ end function
 ' Evaluate experiment variations
 ' ===================================================================
 function GrowthBook__evaluateExperiment(rule as object, result as object) as object
-    if rule.variations = invalid or rule.variations.Count() = 0
+    ' 1. Variations count check
+    if rule.variations = invalid or rule.variations.Count() < 2
         return result
     end if
     
-    ' Get hashing context
+    ' 2. Global enabled check
+    if m.enabled = false
+        m._log("GrowthBook is globally disabled")
+        return result
+    end if
+
+    ' 3. URL forced variations (querystring)
+    ' (Implementation in init or elsewhere, but we check m.forcedVariations here)
+    experimentKey = result.key
+    if rule.key <> invalid then experimentKey = rule.key
+    
+    ' 4. Forced Variations (Global)
+    if m.forcedVariations <> invalid and experimentKey <> invalid and m.forcedVariations[experimentKey] <> invalid
+        forcedIndex = m.forcedVariations[experimentKey]
+        if forcedIndex >= 0 and forcedIndex < rule.variations.Count()
+            m._log("Forced variation (global): " + Str(forcedIndex).Trim())
+            result.variationId = forcedIndex
+            result.value = rule.variations[forcedIndex]
+            result.on = GrowthBook_toBoolean(result.value)
+            result.off = not result.on
+            result.source = "experiment"
+            if rule.ruleId <> invalid 
+                result.ruleId = rule.ruleId
+            else if rule.id <> invalid
+                result.ruleId = rule.id
+            end if
+            if rule.key <> invalid
+                result.experimentId = rule.key
+            end if
+            m._trackExperiment(rule, result)
+            return result
+        else
+            ' Forced variation out of bounds, skip experiment
+            m._log("Forced variation out of bounds (global): " + Str(forcedIndex).Trim())
+            return result
+        end if
+    end if
+
+    ' 5. Active check
+    if rule.active = false
+        m._log("Experiment is inactive")
+        return result
+    end if
+
+    ' 6. Get hashing context and value
     context = m._getHashContext(rule, result.key)
     if not context.success then return result
     
-    ' Check for sticky bucket FIRST (before hash-based assignment)
-    stickyResult = m._getStickyBucketVariation(rule, context, result.key)
-    if stickyResult.versionIsBlocked
-        m._log("Sticky bucket version blocked for experiment")
-        return result
-    end if
-    
-    variationIndex = -1
-    stickyBucketUsed = false
-    
-    if stickyResult.variation >= 0
-        ' Use sticky bucket assignment
-        variationIndex = stickyResult.variation
-        stickyBucketUsed = true
-        m._log("Using sticky bucket: variation " + Str(variationIndex).Trim())
+    ' 7. Sticky Bucket Lookup
+    stickyResult = m._getStickyBucketVariation(rule, result.key)
+    assigned = stickyResult.variation
+    stickyBucketVersionIsBlocked = stickyResult.versionIsBlocked
+    foundStickyBucket = (assigned >= 0)
+
+    if foundStickyBucket
+        m._log("Found sticky bucket for experiment, variation: " + Str(assigned).Trim())
     else
-        ' Normal hash-based assignment
-        ' Get coverage (defaults to 1.0 = 100%)
-        coverage = 1.0
-        if rule.coverage <> invalid then coverage = rule.coverage
-        
-        ' Calculate hash with seed (returns 0-1)
-        n = m._gbhash(context.seed, context.hashValue, context.hashVersion)
-        if n = invalid then return result
-        
-        ' Use provided ranges if available, otherwise calculate from coverage/weights
-        ranges = rule.ranges
-        if ranges = invalid
-            weights = rule.weights
-            ranges = m._getBucketRanges(rule.variations.Count(), coverage, weights)
+        ' 8. Filters/Namespace/Condition Check (if no sticky)
+        ' Filters and Namespace check (Rule inclusion)
+        if not m._isRuleIncluded(rule, result.key)
+            m._log("Experiment rule filtered out (inclusion)")
+            return result
+        end if
+
+        ' Condition check
+        if rule.condition <> invalid
+            if not m._evaluateConditions(rule.condition)
+                m._log("Experiment conditions failed")
+                return result
+            end if
+        end if
+
+        ' 8.1 Parent Conditions / Prerequisites (Prerequisites)
+        if rule.parentConditions <> invalid
+            for each parent in rule.parentConditions
+                parentResult = m.evalFeature(parent.id)
+                if parentResult.source = "cyclicPrerequisite"
+                    m._log("Cyclic prerequisite detected")
+                    return result
+                end if
+                
+                gateFailed = (GrowthBook_toBoolean(parent.gate) and not parentResult.on)
+                conditionFailed = false
+                if parent.condition <> invalid
+                    tempGB = GrowthBook({ attributes: { value: parentResult.value }, savedGroups: m.savedGroups, http: m.http })
+                    if not tempGB._evaluateConditions(parent.condition) then conditionFailed = true
+                end if
+                
+                if gateFailed or conditionFailed
+                    m._log("Prerequisite failed")
+                    return result
+                end if
+            end for
         end if
         
-        ' Choose variation based on hash and bucket ranges
-        variationIndex = m._chooseVariation(n, ranges)
-        m._log("Variation selected: " + Str(variationIndex).Trim() + " (hash=" + Str(n).Trim() + ")")
+        ' 8.2 Groups check
+        if rule.groups <> invalid and rule.groups.Count() > 0
+            userGroups = m.attributes.groups
+            if userGroups = invalid then userGroups = {}
+            matched = false
+            for each g in rule.groups
+                if userGroups[g] = true
+                    matched = true
+                    exit for
+                end if
+            end for
+            if not matched
+                m._log("User not in required groups")
+                return result
+            end if
+        end if
+
+        ' Condition check
+        if rule.condition <> invalid
+            if not m._evaluateConditions(rule.condition)
+                m._log("Experiment conditions failed")
+                return result
+            end if
+        end if
     end if
-    
-    ' If no variation found (user outside buckets), return default
-    if variationIndex < 0
+
+    ' 9. Hash calculation and assignment
+    n = m._gbhash(context.seed, context.hashValue, context.hashVersion)
+    if n = invalid
+        m._log("Invalid hash version")
         return result
     end if
+
+    if not foundStickyBucket
+        if rule.ranges <> invalid
+            ranges = rule.ranges
+        else
+            coverage = 1.0
+            if rule.coverage <> invalid then coverage = rule.coverage
+            ranges = m._getBucketRanges(rule.variations.Count(), coverage, rule.weights)
+        end if
+        assigned = m._chooseVariation(n, ranges)
+    end if
+
+    ' 10. Unenroll if sticky bucket version blocked
+    if stickyBucketVersionIsBlocked
+        m._log("Sticky bucket version blocked")
+        result.stickyBucketUsed = true
+        return result
+    end if
+
+    ' 11. Not in experiment
+    if assigned < 0
+        m._log("User not in experiment rollout")
+        return result
+    end if
+
+    ' 12. Experiment Rule Force
+    if rule.force <> invalid
+        assigned = rule.force
+        ' If forced, we skip QA mode check and go straight to result construction
+    else
+        ' 13. QA Mode check (only if not forced)
+        if m.qaMode = true
+            m._log("GrowthBook is in QA mode, skipping")
+            return result
+        end if
+    end if
+
+    ' 14. Build results
+    inExperiment = true
+    if assigned < 0 or assigned >= rule.variations.Count()
+        assigned = -1
+        inExperiment = false
+    end if
+
+    if assigned >= 0
+        result.value = rule.variations[assigned]
+        result.on = GrowthBook_toBoolean(result.value)
+        result.off = not result.on
+        result.variationId = assigned
+    end if
     
-    ' Save to sticky bucket (even if we used it, to ensure doc exists)
-    m._saveStickyBucketAssignment(rule, context, variationIndex, result.key)
-    
-    ' User is assigned to a variation
-    result.value = rule.variations[variationIndex]
-    result.on = GrowthBook_toBoolean(rule.variations[variationIndex])
-    result.off = not result.on
-    result.variationId = variationIndex
+    result.inExperiment = inExperiment
     result.source = "experiment"
-    result.stickyBucketUsed = stickyBucketUsed
+    result.hashUsed = true
+    result.bucket = n
+    if stickyResult.variation >= 0 then result.stickyBucketUsed = true
+    
+    ' 14.5 Persist sticky bucket
+    if inExperiment and (result.stickyBucketUsed <> true or stickyResult.source = "fallback")
+        m._saveStickyBucketAssignment(rule, context, assigned, result.key)
+    end if
     
     if rule.ruleId <> invalid 
         result.ruleId = rule.ruleId
     else if rule.id <> invalid
         result.ruleId = rule.id
     end if
-    
     if rule.key <> invalid
         result.experimentId = rule.key
     end if
-    
-    ' Track the experiment if callback is set
+
+    ' 15. Tracking
     m._trackExperiment(rule, result)
     
     return result
 end function
+
 
 ' ===================================================================
 ' Set user attributes for targeting and experiments
@@ -1110,12 +1264,10 @@ function GrowthBook__fnv1a32(str as string) as longinteger
     
     ' Process each character
     for i = 0 to str.Len() - 1
-        charCode = Asc(Mid(str, i + 1, 1))
-        ' Bitwise XOR implementation: (a AND NOT b) OR (NOT a AND b)
-        temp1& = hval& AND (NOT charCode)
-        temp2& = (NOT hval&) AND charCode
-        hval& = temp1& OR temp2&
-        hval& = (hval& * prime&) and &hFFFFFFFF&  ' Keep 32-bit
+        charCode& = Asc(Mid(str, i + 1, 1))
+        ' Bitwise XOR: (a OR b) - (a AND b)
+        hval& = (hval& OR charCode&) - (hval& AND charCode&)
+        hval& = (hval& * prime&) AND &hFFFFFFFF&  ' Keep 32-bit
     end for
     
     return hval&
@@ -1157,12 +1309,12 @@ function GrowthBook__gbhash(seed as string, value as string, version as integer)
         combined = seed + value
         hash1& = m._fnv1a32(combined)
         hash2& = m._fnv1a32(m._longToStr(hash1&))
-        return (hash2& mod 10000) / 10000.0
+        return (hash2& MOD 10000) / 10000.0
     else if version = 1
         ' Version 1: fnv1a32(value + seed)
         combined = value + seed
         hash1& = m._fnv1a32(combined)
-        return (hash1& mod 1000) / 1000.0
+        return (hash1& MOD 1000) / 1000.0
     end if
     
     return invalid
@@ -1491,7 +1643,8 @@ function GrowthBook__inNamespace(userId as string, namespace as object) as boole
     n = m._gbhash(namespace[0], userId, 1)
     if n = invalid then return false
     
-    return n >= namespace[1] and n < namespace[2]
+    res = (n >= namespace[1] and n < namespace[2])
+    return res
 end function
 
 ' ===================================================================
@@ -1626,7 +1779,7 @@ end function
 ' ===================================================================
 function GrowthBook__isRuleIncluded(rule as object, featureKey as string) as boolean
     ' If no hashing logic needed, it's included
-    if rule.coverage = invalid and rule.range = invalid and rule.filters = invalid and (rule.hashVersion = invalid or rule.hashVersion = 1)
+    if rule.coverage = invalid and rule.range = invalid and rule.ranges = invalid and rule.filters = invalid and rule.namespace = invalid and (rule.hashVersion = invalid or rule.hashVersion = 1)
         return true
     end if
     
@@ -1638,7 +1791,28 @@ function GrowthBook__isRuleIncluded(rule as object, featureKey as string) as boo
         for each filter in rule.filters
             filterSeed = featureKey
             if filter.seed <> invalid then filterSeed = filter.seed
-            n = m._gbhash(filterSeed, context.hashValue, context.hashVersion)
+            version = 2
+            if filter.hashVersion <> invalid then version = filter.hashVersion
+            
+            ' Determine which attribute to use for this filter
+            filterAttr = "id"
+            if filter.attribute <> invalid and filter.attribute <> ""
+                filterAttr = filter.attribute
+            else if rule.hashAttribute <> invalid and rule.hashAttribute <> ""
+                filterAttr = rule.hashAttribute
+            end if
+            
+            filterVal = m._getAttributeValue(filterAttr)
+            if filterVal = invalid then return false
+            filterValStr = ""
+            if type(filterVal) = "roString" or type(filterVal) = "String"
+                filterValStr = filterVal
+            else
+                filterValStr = Str(filterVal).Trim()
+            end if
+            if filterValStr = "" return false
+            
+            n = m._gbhash(filterSeed, filterValStr, version)
             if n = invalid return false
             
             inAnyRange = false
@@ -1650,18 +1824,33 @@ function GrowthBook__isRuleIncluded(rule as object, featureKey as string) as boo
             end for
             if not inAnyRange return false
         end for
-    else
-        ' 2. Standard Rollout/Range
+        
+        ' If filters matched, return true and IGNORE standard rollout/namespace
+        return true
+    end if
+    
+    ' 2. Standard Rollout/Range/Namespace (Only if no filters)
+    if rule.namespace <> invalid
+        if not m._inNamespace(context.hashValue, rule.namespace) return false
+    end if
+    
+    if rule.range <> invalid
         n = m._gbhash(context.seed, context.hashValue, context.hashVersion)
-        if n = invalid return false
-        
-        if rule.coverage <> invalid and rule.coverage = 0 return false
-        
-        if rule.range <> invalid
-            if not m._inRange(n, rule.range) return false
-        else if rule.coverage <> invalid
-            if n > rule.coverage return false
-        end if
+        if n = invalid or not m._inRange(n, rule.range) return false
+    else if rule.ranges <> invalid
+        n = m._gbhash(context.seed, context.hashValue, context.hashVersion)
+        inAnyRange = false
+        for each rng in rule.ranges
+            if n = invalid then exit for
+            if m._inRange(n, rng)
+                inAnyRange = true
+                exit for
+            end if
+        end for
+        if not inAnyRange return false
+    else if rule.coverage <> invalid and rule.variations = invalid
+        n = m._gbhash(context.seed, context.hashValue, context.hashVersion)
+        if n = invalid or n >= rule.coverage return false
     end if
     
     return true
@@ -1894,8 +2083,8 @@ end function
 ' Look up sticky bucket variation from cached assignment docs
 ' Checks both hashAttribute (higher priority) and fallbackAttribute (lower priority)
 ' Returns { variation: integer, versionIsBlocked: boolean }
-function GrowthBook__getStickyBucketVariation(rule as object, context as object, featureKey as string) as object
-    result = { variation: -1, versionIsBlocked: false }
+function GrowthBook__getStickyBucketVariation(rule as object, featureKey as string) as object
+    result = { variation: -1, versionIsBlocked: false, source: "none" }
     
     if m.stickyBucketService = invalid then return result
     if rule.disableStickyBucketing = true then return result
@@ -1909,65 +2098,77 @@ function GrowthBook__getStickyBucketVariation(rule as object, context as object,
     minBucketVersion = 0
     if rule.minBucketVersion <> invalid then minBucketVersion = rule.minBucketVersion
     
-    ' Merge assignments from fallback (lower priority) and hash (higher priority)
-    mergedAssignments = {}
+    assignments = {}
+    source = "none"
     
-    ' 1. Check fallbackAttribute first (lower priority)
-    if rule.fallbackAttribute <> invalid and rule.fallbackAttribute <> ""
-        fallbackVal = m._getAttributeValue(rule.fallbackAttribute)
-        if fallbackVal <> invalid
-            if type(fallbackVal) <> "roString" and type(fallbackVal) <> "String"
-                fallbackVal = Str(fallbackVal).Trim()
+    ' 1. Check Primary (hashAttribute) first - HIGHER priority
+    hashAttr = "id"
+    if rule.hashAttribute <> invalid and rule.hashAttribute <> "" then hashAttr = rule.hashAttribute
+    attrVal = m._getAttributeValue(hashAttr)
+    if attrVal <> invalid
+        valStr = ""
+        if type(attrVal) = "roString" or type(attrVal) = "String" then valStr = attrVal else valStr = Str(attrVal).Trim()
+        if valStr <> ""
+            doc = m._stickyBucketAssignmentDocs[hashAttr + "||" + valStr]
+            if doc <> invalid and doc.assignments <> invalid
+                assignments = doc.assignments
+                source = "primary"
             end if
-            if fallbackVal <> ""
-                fallbackKey = rule.fallbackAttribute + "||" + fallbackVal
-                fallbackDoc = m._stickyBucketAssignmentDocs[fallbackKey]
-                if fallbackDoc <> invalid and fallbackDoc.assignments <> invalid
-                    for each k in fallbackDoc.assignments
-                        mergedAssignments[k] = fallbackDoc.assignments[k]
-                    end for
+        end if
+    end if
+    
+    ' 2. Check Fallback if not found in primary
+    currentKey = m._getStickyBucketExperimentKey(expKey, bucketVersion)
+    foundInPrimary = assignments.DoesExist(currentKey)
+    
+    if not foundInPrimary and rule.fallbackAttribute <> invalid and rule.fallbackAttribute <> ""
+        attrVal = m._getAttributeValue(rule.fallbackAttribute)
+        if attrVal <> invalid
+            valStr = ""
+            if type(attrVal) = "roString" or type(attrVal) = "String" then valStr = attrVal else valStr = Str(attrVal).Trim()
+            if valStr <> ""
+                doc = m._stickyBucketAssignmentDocs[rule.fallbackAttribute + "||" + valStr]
+                if doc <> invalid and doc.assignments <> invalid
+                    if doc.assignments.DoesExist(currentKey)
+                        ' Only use fallback if we don't already have one from primary
+                        ' OR if we want to merge them but prefer primary for the same key
+                        for each k in doc.assignments
+                            if not assignments.DoesExist(k) then assignments[k] = doc.assignments[k]
+                        end for
+                        source = "fallback"
+                    end if
                 end if
             end if
         end if
     end if
     
-    ' 2. Check hashAttribute (higher priority - overwrites fallback)
-    hashAttr = "id"
-    if rule.hashAttribute <> invalid and rule.hashAttribute <> ""
-        hashAttr = rule.hashAttribute
-    end if
-    hashVal = m._getAttributeValue(hashAttr)
-    if hashVal <> invalid
-        if type(hashVal) <> "roString" and type(hashVal) <> "String"
-            hashVal = Str(hashVal).Trim()
-        end if
-        if hashVal <> ""
-            hashKey = hashAttr + "||" + hashVal
-            hashDoc = m._stickyBucketAssignmentDocs[hashKey]
-            if hashDoc <> invalid and hashDoc.assignments <> invalid
-                for each k in hashDoc.assignments
-                    mergedAssignments[k] = hashDoc.assignments[k]
-                end for
-            end if
-        end if
-    end if
+    if assignments.Count() = 0 then return result
     
-    if mergedAssignments.Count() = 0 then return result
+    result.source = source
     
-    ' Check for blocked versions
-    ' If any version < minBucketVersion has an assignment, user is blocked
+    ' Check for blocked versions (on the final merged assignments)
     for v = 0 to minBucketVersion - 1
         vKey = m._getStickyBucketExperimentKey(expKey, v)
-        if mergedAssignments.DoesExist(vKey)
+        if assignments.DoesExist(vKey)
             result.versionIsBlocked = true
             return result
         end if
     end for
     
     ' Look for current version assignment
-    currentKey = m._getStickyBucketExperimentKey(expKey, bucketVersion)
-    if mergedAssignments.DoesExist(currentKey)
-        result.variation = Int(Val(mergedAssignments[currentKey]))
+    if assignments.DoesExist(currentKey)
+        variationKey = assignments[currentKey]
+        found = false
+        if rule.meta <> invalid
+            for i = 0 to rule.meta.Count() - 1
+                if rule.meta[i].key = variationKey
+                    result.variation = i
+                    found = true
+                    exit for
+                end if
+            end for
+        end if
+        if not found then result.variation = Int(Val(variationKey))
     end if
     
     return result
@@ -2037,7 +2238,7 @@ function GrowthBookInMemoryStickyBucketService() as object
                 assignments: assignments
             }
         end sub,
-        getAllAssignments: function(attributes as object) as object
+        getAllAssignments: function() as object
             return m.docs
         end function
     }
@@ -2063,7 +2264,7 @@ function GrowthBookRegistryStickyBucketService() as object
             m.section.Write(key, FormatJson(doc))
             m.section.Flush()
         end sub,
-        getAllAssignments: function(attributes as object) as object
+        getAllAssignments: function() as object
             result = {}
             keys = m.section.GetKeyList()
             for each key in keys
