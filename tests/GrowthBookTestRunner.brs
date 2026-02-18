@@ -390,10 +390,252 @@ end function
 ' run (experiment): [name, context, experiment, value, inExperiment, hashUsed]
 function GrowthBookTestRunner_runExperimentTest(test as object) as object
     testName = test[0]
-    ' Note: "run" tests evaluate standalone experiments with features like
-    ' qaMode, url, enabled, active which are not part of feature-flag evaluation.
-    ' Skipping for now - feature tests cover most experiment logic.
-    return { status: "skipped", name: testName + " (run tests not yet implemented)" }
+    context = test[1]
+    experiment = test[2]
+    expectedValue = test[3]
+    expectedInExperiment = test[4]
+    expectedHashUsed = test[5]
+    
+    ' Create GrowthBook instance with context
+    gbConfig = { http: {} }
+    if type(context) = "roAssociativeArray"
+        if context.DoesExist("attributes") then gbConfig.attributes = context.attributes
+        if context.DoesExist("forcedVariations") then gbConfig.forcedVariations = context.forcedVariations
+        if context.DoesExist("savedGroups") then gbConfig.savedGroups = context.savedGroups
+        if context.DoesExist("features") then gbConfig.features = context.features
+    end if
+    gb = GrowthBook(gbConfig)
+    gb.init()
+    
+    numVariations = experiment.variations.Count()
+    
+    ' 1. Less than 2 variations
+    if numVariations < 2
+        return _runExpGetResult(testName, experiment, -1, false, expectedValue, expectedInExperiment, expectedHashUsed)
+    end if
+    
+    ' 2. Context forcedVariations
+    if type(context) = "roAssociativeArray" and context.DoesExist("forcedVariations") and type(context.forcedVariations) = "roAssociativeArray" and context.forcedVariations.DoesExist(experiment.key)
+        force = context.forcedVariations[experiment.key]
+        return _runExpGetResult(testName, experiment, force, false, expectedValue, expectedInExperiment, expectedHashUsed)
+    end if
+    
+    ' 3. Context enabled === false
+    if type(context) = "roAssociativeArray" and context.DoesExist("enabled") and context.enabled = false
+        return _runExpGetResult(testName, experiment, -1, false, expectedValue, expectedInExperiment, expectedHashUsed)
+    end if
+    
+    ' 4. URL querystring override (checked before active)
+    if type(context) = "roAssociativeArray" and context.DoesExist("url") and context.url <> invalid
+        urlStr = context.url
+        if type(urlStr) = "roString" or type(urlStr) = "String"
+            override = _runExpGetQueryStringOverride(experiment.key, urlStr, numVariations)
+            if override >= 0
+                return _runExpGetResult(testName, experiment, override, false, expectedValue, expectedInExperiment, expectedHashUsed)
+            end if
+        end if
+    end if
+    
+    ' 5. Experiment active === false
+    if experiment.DoesExist("active") and experiment.active = false
+        return _runExpGetResult(testName, experiment, -1, false, expectedValue, expectedInExperiment, expectedHashUsed)
+    end if
+    
+    ' 6. Get hash attribute and value
+    hashAttr = "id"
+    if experiment.DoesExist("hashAttribute") and experiment.hashAttribute <> invalid and experiment.hashAttribute <> ""
+        hashAttr = experiment.hashAttribute
+    end if
+    hashValue = ""
+    if type(context) = "roAssociativeArray" and context.DoesExist("attributes") and type(context.attributes) = "roAssociativeArray" and context.attributes.DoesExist(hashAttr)
+        val = context.attributes[hashAttr]
+        if val <> invalid
+            if type(val) = "roString" or type(val) = "String"
+                hashValue = val
+            else
+                hashValue = Str(val).Trim()
+            end if
+        end if
+    end if
+    if hashValue = ""
+        return _runExpGetResult(testName, experiment, -1, false, expectedValue, expectedInExperiment, expectedHashUsed)
+    end if
+    
+    ' 7. Filters / Namespace
+    if experiment.DoesExist("filters") and experiment.filters <> invalid
+        for each filter in experiment.filters
+            filterAttr = "id"
+            if filter.DoesExist("attribute") and filter.attribute <> invalid and filter.attribute <> ""
+                filterAttr = filter.attribute
+            end if
+            filterHashValue = ""
+            if type(context) = "roAssociativeArray" and context.DoesExist("attributes") and type(context.attributes) = "roAssociativeArray" and context.attributes.DoesExist(filterAttr)
+                fval = context.attributes[filterAttr]
+                if fval <> invalid
+                    if type(fval) = "roString" or type(fval) = "String"
+                        filterHashValue = fval
+                    else
+                        filterHashValue = Str(fval).Trim()
+                    end if
+                end if
+            end if
+            if filterHashValue = ""
+                return _runExpGetResult(testName, experiment, -1, false, expectedValue, expectedInExperiment, expectedHashUsed)
+            end if
+            filterSeed = experiment.key
+            if filter.DoesExist("seed") and filter.seed <> invalid then filterSeed = filter.seed
+            filterHashVersion = 2
+            if filter.DoesExist("hashVersion") and filter.hashVersion <> invalid then filterHashVersion = filter.hashVersion
+            n = gb._gbhash(filterSeed, filterHashValue, filterHashVersion)
+            if n = invalid
+                return _runExpGetResult(testName, experiment, -1, false, expectedValue, expectedInExperiment, expectedHashUsed)
+            end if
+            inRange = false
+            for each rng in filter.ranges
+                if gb._inRange(n, rng)
+                    inRange = true
+                    exit for
+                end if
+            end for
+            if not inRange
+                return _runExpGetResult(testName, experiment, -1, false, expectedValue, expectedInExperiment, expectedHashUsed)
+            end if
+        end for
+    else if experiment.DoesExist("namespace") and experiment.namespace <> invalid
+        if not gb._inNamespace(hashValue, experiment.namespace)
+            return _runExpGetResult(testName, experiment, -1, false, expectedValue, expectedInExperiment, expectedHashUsed)
+        end if
+    end if
+    
+    ' 8. Condition
+    if experiment.DoesExist("condition") and experiment.condition <> invalid
+        if not gb._evaluateConditions(experiment.condition)
+            return _runExpGetResult(testName, experiment, -1, false, expectedValue, expectedInExperiment, expectedHashUsed)
+        end if
+    end if
+    
+    ' 9. Parent conditions (prerequisites)
+    if experiment.DoesExist("parentConditions") and experiment.parentConditions <> invalid
+        for each parent in experiment.parentConditions
+            parentResult = gb.evalFeature(parent.id)
+            tempGB = GrowthBook({ attributes: { value: parentResult.value }, savedGroups: gb.savedGroups, http: {} })
+            if not tempGB._evaluateConditions(parent.condition)
+                return _runExpGetResult(testName, experiment, -1, false, expectedValue, expectedInExperiment, expectedHashUsed)
+            end if
+        end for
+    end if
+    
+    ' 10. Calculate hash
+    hashVersion = 1
+    if experiment.DoesExist("hashVersion") and experiment.hashVersion <> invalid
+        hashVersion = experiment.hashVersion
+    end if
+    seed = experiment.key
+    if experiment.DoesExist("seed") and experiment.seed <> invalid and experiment.seed <> ""
+        seed = experiment.seed
+    end if
+    n = gb._gbhash(seed, hashValue, hashVersion)
+    if n = invalid
+        return _runExpGetResult(testName, experiment, -1, false, expectedValue, expectedInExperiment, expectedHashUsed)
+    end if
+    
+    ' 11. Get ranges
+    ranges = invalid
+    if experiment.DoesExist("ranges") and experiment.ranges <> invalid
+        ranges = experiment.ranges
+    end if
+    if ranges = invalid
+        coverage = 1.0
+        if experiment.DoesExist("coverage") and experiment.coverage <> invalid
+            coverage = experiment.coverage
+        end if
+        weights = invalid
+        if experiment.DoesExist("weights") and experiment.weights <> invalid
+            weights = experiment.weights
+        end if
+        ranges = gb._getBucketRanges(numVariations, coverage, weights)
+    end if
+    
+    ' 12. Choose variation
+    assigned = gb._chooseVariation(n, ranges)
+    
+    ' 13. If not in range
+    if assigned < 0
+        return _runExpGetResult(testName, experiment, -1, false, expectedValue, expectedInExperiment, expectedHashUsed)
+    end if
+    
+    ' 14. Experiment force (checked after coverage/range)
+    if experiment.DoesExist("force")
+        return _runExpGetResult(testName, experiment, experiment.force, false, expectedValue, expectedInExperiment, expectedHashUsed)
+    end if
+    
+    ' 15. QA mode
+    if type(context) = "roAssociativeArray" and context.DoesExist("qaMode") and context.qaMode = true
+        return _runExpGetResult(testName, experiment, -1, false, expectedValue, expectedInExperiment, expectedHashUsed)
+    end if
+    
+    ' 16. Return assigned variation
+    return _runExpGetResult(testName, experiment, assigned, true, expectedValue, expectedInExperiment, expectedHashUsed)
+end function
+
+' Helper: build run result and compare with expected
+function _runExpGetResult(testName as string, experiment as object, variationIndex as dynamic, hashUsed as boolean, expectedValue as dynamic, expectedInExperiment as boolean, expectedHashUsed as boolean) as object
+    numVariations = experiment.variations.Count()
+    inExperiment = true
+    if type(variationIndex) <> "roInteger" and type(variationIndex) <> "Integer"
+        variationIndex = Int(variationIndex)
+    end if
+    if variationIndex < 0 or variationIndex >= numVariations
+        variationIndex = 0
+        inExperiment = false
+    end if
+    value = experiment.variations[variationIndex]
+    
+    if not deepEqual(value, expectedValue)
+        return { status: "failed", name: testName, expected: formatValue(expectedValue), actual: formatValue(value) }
+    end if
+    if inExperiment <> expectedInExperiment
+        expStr = "false"
+        actStr = "false"
+        if expectedInExperiment then expStr = "true"
+        if inExperiment then actStr = "true"
+        return { status: "failed", name: testName + " (inExperiment)", expected: expStr, actual: actStr }
+    end if
+    if hashUsed <> expectedHashUsed
+        expStr = "false"
+        actStr = "false"
+        if expectedHashUsed then expStr = "true"
+        if hashUsed then actStr = "true"
+        return { status: "failed", name: testName + " (hashUsed)", expected: expStr, actual: actStr }
+    end if
+    return { status: "passed", name: testName }
+end function
+
+' Helper: parse URL query string for experiment override
+function _runExpGetQueryStringOverride(key as string, url as string, numVariations as integer) as integer
+    qPos = Instr(1, url, "?")
+    if qPos = 0 then return -1
+    
+    queryStr = Mid(url, qPos + 1)
+    hashPos = Instr(1, queryStr, "#")
+    if hashPos > 0 then queryStr = Left(queryStr, hashPos - 1)
+    
+    parts = queryStr.Split("&")
+    for each part in parts
+        eqPos = Instr(1, part, "=")
+        if eqPos > 0
+            pKey = Left(part, eqPos - 1)
+            pValue = Mid(part, eqPos + 1)
+            if pKey = key
+                intVal = Int(Val(pValue))
+                if intVal >= 0 and intVal < numVariations
+                    return intVal
+                end if
+            end if
+        end if
+    end for
+    
+    return -1
 end function
 
 ' decrypt: [name, encryptedString, key, expected]
@@ -412,14 +654,11 @@ function GrowthBookTestRunner_runDecryptTest(test as object) as object
         return { status: "skipped", name: testName + " (roEVPCipher not available)" }
     end if
     
-    ' Probe: verify cipher.Setup() accepts roByteArray args (real Roku API)
-    ' Some environments implement roEVPCipher but expect String args instead of roByteArray
-    probeKey = CreateObject("roByteArray")
-    probeKey.FromHexString("00000000000000000000000000000000")
+    ' Probe: verify cipher.Setup() works with hex string args
     try
-        cipher.Setup(true, "aes-128-cbc", probeKey, probeKey, 1)
+        cipher.Setup(true, "aes-128-cbc", "00000000000000000000000000000000", "00000000000000000000000000000000", 1)
     catch e
-        return { status: "skipped", name: testName + " (roEVPCipher does not support roByteArray)" }
+        return { status: "skipped", name: testName + " (roEVPCipher Setup failed)" }
     end try
     
     ' Run decrypt

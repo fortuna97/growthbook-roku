@@ -28,10 +28,11 @@ hash:             15/15  (100%)
 getBucketRange:   13/13  (100%)
 chooseVariation:  13/13  (100%)
 feature:          46/46  (100%)
+run:              73/73  (100%)
 decrypt:          10/10  (100%)
 stickyBucket:     9/9    (100%)
 ──────────────────────────────────
-TOTAL: 327/327 tests passed (100%)
+TOTAL: 400/400 tests passed (100%)
 ```
 
 The validator (`tests/validate-logic.js`) implements SDK logic in JavaScript and runs it against `cases.json` for rapid development validation.
@@ -269,11 +270,13 @@ The `tests/cases.json` file contains language-agnostic behavioral test cases fro
 {
   "specVersion": "0.7.1",
   "evalCondition": [ /* 221 test cases */ ],
-  "feature": [ /* 46 test cases */ ],
   "hash": [ /* 15 test cases */ ],
+  "getBucketRange": [ /* 13 test cases */ ],
   "chooseVariation": [ /* 13 test cases */ ],
-  "decrypt": [ /* 9 test cases */ ],
-  "stickyBucketing": [ /* 11 test cases */ ]
+  "feature": [ /* 46 test cases */ ],
+  "run": [ /* 73 test cases */ ],
+  "decrypt": [ /* 10 test cases */ ],
+  "stickyBucket": [ /* 9 test cases */ ]
 }
 ```
 
@@ -518,4 +521,4 @@ When adding new SDK features:
 
 **Last Updated**: February 2026  
 **Rooibos Version**: 5.x  
-**JavaScript Validator**: 327/327 tests (100%)
+**JavaScript Validator**: 400/400 tests (100%)

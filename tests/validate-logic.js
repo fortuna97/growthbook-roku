@@ -961,6 +961,173 @@ function runTests(category, tests) {
                     process.stdout.write('✗');
                     failures.push({ name, expected: JSON.stringify(expected), actual: JSON.stringify(result) });
                 }
+            } else if (category === 'run') {
+                // run tests: [name, context, experiment, value, inExperiment, hashUsed]
+                const [context, experiment, expectedValue, expectedInExperiment, expectedHashUsed] = rest;
+                const gb = new GrowthBook({
+                    attributes: context.attributes,
+                    features: context.features,
+                    savedGroups: context.savedGroups,
+                    forcedVariations: context.forcedVariations
+                });
+
+                const numVariations = experiment.variations.length;
+
+                function getRunResult(variationIndex, hashUsed) {
+                    let inExperiment = true;
+                    if (variationIndex < 0 || variationIndex >= numVariations) {
+                        variationIndex = 0;
+                        inExperiment = false;
+                    }
+                    return { value: experiment.variations[variationIndex], inExperiment, hashUsed };
+                }
+
+                let runResult;
+
+                // 1. Less than 2 variations
+                if (numVariations < 2) {
+                    runResult = getRunResult(-1, false);
+                }
+
+                // 2. Context forcedVariations
+                if (!runResult && context.forcedVariations && experiment.key in context.forcedVariations) {
+                    runResult = getRunResult(context.forcedVariations[experiment.key], false);
+                }
+
+                // 3. Context enabled === false
+                if (!runResult && context.enabled === false) {
+                    runResult = getRunResult(-1, false);
+                }
+
+                // 4. URL querystring override
+                if (!runResult && context.url) {
+                    const urlObj = new URL(context.url, 'http://localhost');
+                    const qsVal = urlObj.searchParams.get(experiment.key);
+                    if (qsVal !== null) {
+                        const intVal = parseInt(qsVal, 10);
+                        if (!isNaN(intVal) && intVal >= 0 && intVal < numVariations) {
+                            runResult = getRunResult(intVal, false);
+                        }
+                    }
+                }
+
+                // 5. Experiment active === false
+                if (!runResult && experiment.active === false) {
+                    runResult = getRunResult(-1, false);
+                }
+
+                // 6. Get hash attribute and value
+                let hashAttr = experiment.hashAttribute || 'id';
+                let hashValue = context.attributes ? context.attributes[hashAttr] : undefined;
+                if (hashValue !== undefined && hashValue !== null) {
+                    hashValue = String(hashValue);
+                } else {
+                    hashValue = '';
+                }
+                if (!runResult && hashValue === '') {
+                    runResult = getRunResult(-1, false);
+                }
+
+                // 7. Filters / Namespace
+                if (!runResult && experiment.filters) {
+                    for (const filter of experiment.filters) {
+                        const filterAttr = filter.attribute || 'id';
+                        let filterHashValue = context.attributes ? context.attributes[filterAttr] : undefined;
+                        if (filterHashValue !== undefined && filterHashValue !== null) {
+                            filterHashValue = String(filterHashValue);
+                        } else {
+                            filterHashValue = '';
+                        }
+                        if (filterHashValue === '') {
+                            runResult = getRunResult(-1, false);
+                            break;
+                        }
+                        const filterSeed = filter.seed || experiment.key;
+                        const filterHashVersion = filter.hashVersion || 2;
+                        const n = gb._gbhash(filterSeed, filterHashValue, filterHashVersion);
+                        if (n === null) {
+                            runResult = getRunResult(-1, false);
+                            break;
+                        }
+                        let inRange = false;
+                        for (const rng of filter.ranges) {
+                            if (gb._inRange(n, rng)) { inRange = true; break; }
+                        }
+                        if (!inRange) {
+                            runResult = getRunResult(-1, false);
+                            break;
+                        }
+                    }
+                } else if (!runResult && experiment.namespace) {
+                    const [nsId, nsStart, nsEnd] = experiment.namespace;
+                    const n = gb._gbhash(nsId, hashValue, 1);
+                    if (n === null || n < nsStart || n >= nsEnd) {
+                        runResult = getRunResult(-1, false);
+                    }
+                }
+
+                // 8. Condition
+                if (!runResult && experiment.condition) {
+                    if (!gb._evaluateConditions(experiment.condition)) {
+                        runResult = getRunResult(-1, false);
+                    }
+                }
+
+                // 9. Parent conditions
+                if (!runResult && experiment.parentConditions) {
+                    for (const parent of experiment.parentConditions) {
+                        const parentResult = gb.evalFeature(parent.id);
+                        const tempGb = new GrowthBook({
+                            attributes: { value: parentResult.value },
+                            savedGroups: gb.savedGroups
+                        });
+                        if (!tempGb._evaluateConditions(parent.condition)) {
+                            runResult = getRunResult(-1, false);
+                            break;
+                        }
+                    }
+                }
+
+                // 10-12. Hash, ranges, choose variation
+                if (!runResult) {
+                    const hashVersion = experiment.hashVersion || 1;
+                    const seed = experiment.seed || experiment.key;
+                    const n = gb._gbhash(seed, hashValue, hashVersion);
+                    if (n === null) {
+                        runResult = getRunResult(-1, false);
+                    } else {
+                        const ranges = experiment.ranges || gb._getBucketRanges(numVariations, experiment.coverage !== undefined ? experiment.coverage : 1, experiment.weights);
+                        const assigned = gb._chooseVariation(n, ranges);
+                        if (assigned < 0) {
+                            runResult = getRunResult(-1, false);
+                        } else if (experiment.force !== undefined) {
+                            // 14. Experiment force (after coverage)
+                            runResult = getRunResult(experiment.force, false);
+                        } else if (context.qaMode) {
+                            // 15. QA mode
+                            runResult = getRunResult(-1, false);
+                        } else {
+                            runResult = getRunResult(assigned, true);
+                        }
+                    }
+                }
+
+                const valMatch = gb._deepEqual(runResult.value, expectedValue);
+                const ieMatch = runResult.inExperiment === expectedInExperiment;
+                const huMatch = runResult.hashUsed === expectedHashUsed;
+
+                if (valMatch && ieMatch && huMatch) {
+                    passed++;
+                    process.stdout.write('✓');
+                } else {
+                    failed++;
+                    process.stdout.write('✗');
+                    const parts = [];
+                    if (!valMatch) parts.push(`value: expected=${JSON.stringify(expectedValue)}, got=${JSON.stringify(runResult.value)}`);
+                    if (!ieMatch) parts.push(`inExperiment: expected=${expectedInExperiment}, got=${runResult.inExperiment}`);
+                    if (!huMatch) parts.push(`hashUsed: expected=${expectedHashUsed}, got=${runResult.hashUsed}`);
+                    failures.push({ name, expected: parts.join('; '), actual: '' });
+                }
             } else if (category === 'decrypt') {
                 // decrypt tests: [name, encryptedString, key, expected]
                 const [encryptedStr, key, expected] = rest;
@@ -1103,7 +1270,7 @@ function runTests(category, tests) {
 // ================================================================
 
 const results = {};
-const categories = ['evalCondition', 'hash', 'getBucketRange', 'chooseVariation', 'feature', 'decrypt', 'stickyBucket'];
+const categories = ['evalCondition', 'hash', 'getBucketRange', 'chooseVariation', 'feature', 'run', 'decrypt', 'stickyBucket'];
 
 for (const category of categories) {
     if (cases[category]) {

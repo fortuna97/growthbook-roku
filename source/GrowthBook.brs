@@ -1747,28 +1747,26 @@ function GrowthBook__decrypt(encryptedStr as string, keyStr as string) as string
     end if
     
     ' Cipher operations wrapped in try/catch for platform compatibility
-    ' (some environments may not support roByteArray args for roEVPCipher)
     try
-        ' Setup: false=decrypt, aes-128-cbc algorithm, key, iv, padding=1 (PKCS7)
-        if not cipher.Setup(false, "aes-128-cbc", keyBytes, ivBytes, 1)
+        ' Setup returns 0 on success, non-zero on failure (Integer, not Boolean)
+        if cipher.Setup(false, "aes-128-cbc", keyBytes.ToHexString(), ivBytes.ToHexString(), 1) <> 0
             m._log("ERROR: Cipher setup failed")
             return ""
         end if
         
-        ' Process the encrypted data
+        ' Process decrypts the data (brs-engine does update+final internally)
         decrypted = cipher.Process(ctBytes)
-        if decrypted = invalid
+        if decrypted = invalid or decrypted.Count() = 0
             m._log("ERROR: Decryption failed")
             return ""
         end if
         
-        ' Get final block (handles PKCS7 padding removal)
+        ' On real Roku, Final() returns the last padded block separately
+        ' In brs-engine, Process() already includes it, so Final() returns empty
         finalBlock = cipher.Final()
         if finalBlock <> invalid and finalBlock.Count() > 0
             decrypted.Append(finalBlock)
         end if
-        
-        if decrypted.Count() = 0 then return ""
         
         return decrypted.ToAsciiString()
     catch e
