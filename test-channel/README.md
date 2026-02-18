@@ -1,6 +1,6 @@
 # GrowthBook SDK Test Channel for brs-desktop
 
-Validates the GrowthBook SDK v2.0.0 by running **actual BrightScript code** against the official spec test suite (`cases.json`) inside [brs-desktop](https://github.com/lvcabral/brs-desktop).
+Validates the GrowthBook SDK v2.0.1 by running **actual BrightScript code** against the official spec test suite (`cases.json`) inside [brs-desktop](https://github.com/lvcabral/brs-desktop).
 
 ## Quick Start
 

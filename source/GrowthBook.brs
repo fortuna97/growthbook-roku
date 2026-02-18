@@ -178,7 +178,7 @@ function GrowthBook(config as object) as object
     if instance.http <> invalid and type(instance.http) = "roURLTransfer"
         instance.http.SetCertificatesFile("common:/certs/ca-bundle.crt")
         instance.http.AddHeader("Content-Type", "application/json")
-        instance.http.AddHeader("User-Agent", "GrowthBook-Roku/2.0.0")
+        instance.http.AddHeader("User-Agent", "GrowthBook-Roku/2.0.1")
     end if
     
     return instance

@@ -3,18 +3,18 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![BrightScript](https://img.shields.io/badge/BrightScript-2.0-purple.svg)](https://developer.roku.com/docs/references/brightscript/language/brightscript-language-reference.md)
 [![Roku](https://img.shields.io/badge/Roku-SceneGraph-6f3f9f.svg)](https://developer.roku.com/)
-[![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.0.1-blue.svg)](CHANGELOG.md)
 [![Production Ready](https://img.shields.io/badge/status-production%20ready-green.svg)](docs/INTEGRATION_GUIDE.md)
 
 Official [GrowthBook](https://www.growthbook.io/) SDK for Roku/BrightScript applications. Add feature flags and A/B testing to your Roku channels with a simple, lightweight SDK.
 
-**Current Version:** v2.0.0 — [View Changelog](CHANGELOG.md) | [Integration Guide](docs/INTEGRATION_GUIDE.md) | [Quick Start](docs/QUICKSTART.md)
+**Current Version:** v2.0.1 — [View Changelog](CHANGELOG.md) | [Integration Guide](docs/INTEGRATION_GUIDE.md) | [Quick Start](docs/QUICKSTART.md)
 
 ## Features
 
 - 🚀 **Lightweight** - Core SDK is ~50KB, minimal memory footprint
 - ⚡ **Fast** - Feature evaluation in <1ms, optimized for Roku devices
-- 🎯 **Full Spec Alignment** - 327/327 spec tests passing (evalCondition, hash, bucketing, features, decrypt, stickyBucket)
+- 🎯 **Full Spec Alignment** - 401/401 native BrightScript tests passing (all 8 spec categories + smoke tests)
 - 🧪 **A/B Testing** - Run experiments with accurate traffic splits and holdout groups
 - 🔄 **Consistent Bucketing** - Same user always sees same variation (cross-platform)
 - 📊 **Analytics Ready** - Tracking callbacks, feature usage events, and plugin system
@@ -707,7 +707,7 @@ print result.ruleId      ' ID of the matching rule
 
 ### Advanced Targeting
 
-The SDK v2.0.0 supports all GrowthBook advanced targeting rules:
+The SDK supports all GrowthBook advanced targeting rules:
 
 - **Filters**: Complex user segmentation using hash-based filtering.
 - **Ranges (Intervals)**: Precise traffic control for experiments and rollouts.
@@ -787,38 +787,34 @@ See the `examples/` directory for complete working examples:
 
 ## Testing
 
-### Spec Compliance Tests
-
-Run the logic validator (JavaScript shim) and native BrightScript tests to ensure 100% parity with the GrowthBook specification:
+### Run All Tests
 
 ```bash
 npm test
 ```
 
-You can also run them individually:
+This runs both the JS validator (327 spec tests) and native BrightScript runner (401 tests) in sequence.
 
-- `npm run test:validator` - Run the logic validator (fast, algorithm validation)
-- `npm run test:native` - Run the native BrightScript tests (validates actual .brs execution)
+### Individual Test Commands
 
-### Validate BrightScript Syntax
+| Command | What It Does |
+|---------|--------------|
+| `npm run test:validator` | JS logic validator against `cases.json` (fast, no device needed) |
+| `npm run test:native` | Native BrightScript tests via `brs-engine` (runs actual `.brs` code) |
+| `npm run test:channel` | Build test channel for [brs-desktop](https://github.com/lvcabral/brs-desktop) on-device validation |
+| `npm run lint` | BrightScript syntax and lint checks |
 
-Check for syntax errors and linting issues:
+### On-Device Testing (brs-desktop)
+
+For testing in a full Roku-like runtime with SceneGraph:
 
 ```bash
-npm install -g @rokucommunity/bsc
-npm run lint
+npm run test:channel
 ```
 
-### Deploy to Roku Device
+Then open `test-channel/pkg.zip` in brs-desktop. See [test-channel/README.md](./test-channel/README.md) for details.
 
-```bash
-export ROKU_DEV_TARGET=192.168.1.100
-export ROKU_DEV_PASSWORD=your-password
-
-npm run deploy
-```
-
-See [TESTING.md](./TESTING.md) for comprehensive testing guide.
+See [docs/TESTING.md](./docs/TESTING.md) for the comprehensive testing guide.
 
 ## Performance
 
@@ -868,17 +864,8 @@ We welcome contributions! Please see [CONTRIBUTING.md](./CONTRIBUTING.md) for gu
 ### Running Tests
 
 ```bash
-# Install dependencies
 npm install
-
-# Run unit tests
 npm test
-
-# Validate syntax
-npm run lint
-
-# Deploy to test device
-npm run deploy
 ```
 
 ## FAQ
