@@ -1,7 +1,7 @@
 # GrowthBook Roku SDK - Integration Guide
 
-**Version:** 1.3.0  
-**Last Updated:** January 2026  
+**Version:** 2.0.0  
+**Last Updated:** February 2026  
 **Target:** Production deployment
 
 ---
@@ -14,7 +14,10 @@ This guide provides step-by-step instructions for integrating the GrowthBook Rok
 - Feature flags with server-side control
 - A/B experiments with configurable traffic splits
 - User targeting by version, attributes, and segments
-- Real-time feature updates without channel redeployment
+- Encrypted feature payloads for secure delivery
+- Sticky bucketing for persistent experiment assignments
+- Tracking plugins for analytics integration
+- On-demand feature refresh without channel redeployment
 
 **Performance:**
 - SDK size: ~50KB
@@ -314,6 +317,168 @@ sub OnUserUpgradedToPremium()
     
     ' Features will now evaluate with new attributes
     RefreshUI()
+end sub
+```
+
+---
+
+## Encrypted Features (v2.0.0)
+
+If your GrowthBook project uses encrypted feature payloads, configure the SDK with your decryption key. The SDK automatically decrypts AES-128-CBC encrypted payloads.
+
+**Requirements:** Roku OS 9.2+ (for `roEVPCipher`)
+
+### Setup
+
+```brightscript
+gb = GrowthBook({
+    apiHost: "https://cdn.growthbook.io",
+    clientKey: "sdk_YOUR_KEY",
+    decryptionKey: "your-base64-decryption-key",  ' From GrowthBook dashboard
+    attributes: { id: "user-123" }
+})
+gb.init()  ' Encrypted features are decrypted transparently
+```
+
+### How It Works
+
+1. API returns `encryptedFeatures` (base64-encoded IV + ciphertext) instead of plain `features`
+2. SDK uses AES-128-CBC with the provided key to decrypt
+3. Decrypted JSON is parsed normally — no changes to `isOn()`, `getFeatureValue()`, etc.
+4. If decryption fails (wrong key, corrupted data), SDK logs an error and continues with empty features
+
+### Encrypted Saved Groups
+
+If your project also encrypts saved groups, the SDK handles `encryptedSavedGroups` the same way:
+
+```brightscript
+gb = GrowthBook({
+    clientKey: "sdk_YOUR_KEY",
+    decryptionKey: "your-key",  ' Decrypts both features and saved groups
+    savedGroups: {}              ' Will be populated from encrypted response
+})
+```
+
+---
+
+## Sticky Bucketing (v2.0.0)
+
+Sticky bucketing ensures users always see the same experiment variation, even when:
+- User attributes change (e.g., anonymous to logged-in)
+- Experiment traffic allocation changes
+- Bucket ranges are re-assigned
+
+### Setup with In-Memory Service
+
+For testing or single-session use:
+
+```brightscript
+sbs = GrowthBookInMemoryStickyBucketService()
+
+gb = GrowthBook({
+    clientKey: "sdk_YOUR_KEY",
+    attributes: { id: "user-123" },
+    stickyBucketService: sbs
+})
+gb.init()
+```
+
+### Setup with Registry Service (Production)
+
+For persistent storage across app restarts:
+
+```brightscript
+sbs = GrowthBookRegistryStickyBucketService()
+
+gb = GrowthBook({
+    clientKey: "sdk_YOUR_KEY",
+    attributes: { id: "user-123" },
+    stickyBucketService: sbs
+})
+gb.init()
+```
+
+### Anonymous to Logged-In Transition
+
+Sticky bucketing supports `fallbackAttribute` for seamless user transitions:
+
+```brightscript
+' Before login: user identified by device ID
+gb.setAttributes({
+    deviceId: "roku-abc123",
+    id: ""
+})
+
+' After login: user identified by account ID
+' Sticky bucket preserves the variation from deviceId
+gb.setAttributes({
+    deviceId: "roku-abc123",
+    id: "user-456"
+})
+```
+
+The experiment's `fallbackAttribute` (configured in GrowthBook dashboard) tells the SDK to check the `deviceId` assignment when the primary `id` has no prior assignment.
+
+---
+
+## Tracking Plugins (v2.0.0)
+
+Tracking plugins provide a structured way to send experiment exposure and feature usage events to your analytics platform.
+
+### Built-In Plugin
+
+The SDK includes `GrowthBookTrackingPlugin` for sending batched HTTP events:
+
+```brightscript
+plugin = GrowthBookTrackingPlugin({
+    ingestorHost: "https://analytics.example.com",
+    clientKey: "sdk_YOUR_KEY",
+    batchSize: 10
+})
+
+gb = GrowthBook({
+    clientKey: "sdk_YOUR_KEY",
+    attributes: { id: "user-123" }
+})
+gb.init()
+gb.registerTrackingPlugin(plugin)
+
+' Now all experiment exposures and feature evaluations
+' are automatically sent to your endpoint
+```
+
+### Using with trackingCallback
+
+Tracking plugins work alongside the existing `trackingCallback`. Both are called:
+
+```brightscript
+gb = GrowthBook({
+    clientKey: "sdk_YOUR_KEY",
+    attributes: { id: "user-123" },
+    trackingCallback: sub(experiment, result)
+        ' Direct callback - fires immediately
+        print "Experiment: " + experiment.key
+    end sub
+})
+gb.init()
+
+' Plugin - receives events via plugin interface
+gb.registerTrackingPlugin(myPlugin)
+```
+
+---
+
+## Refreshing Features (v2.0.0)
+
+For long-running Roku apps, you can refresh features on demand:
+
+```brightscript
+' Refresh when user navigates to a new section
+sub OnScreenChanged()
+    if m.global.gb.refreshFeatures()
+        print "Features updated"
+        RefreshUI()
+    end if
 end sub
 ```
 
@@ -663,7 +828,10 @@ end function
 1. ✅ Complete integration using this guide
 2. ✅ Test basic feature flags
 3. ✅ Set up first experiment in GrowthBook dashboard
-4. ✅ Deploy to production
-5. ✅ Monitor feature usage and experiment results
+4. ✅ Configure encrypted features (if needed)
+5. ✅ Enable sticky bucketing for stable experiment assignments
+6. ✅ Register tracking plugins for analytics
+7. ✅ Deploy to production
+8. ✅ Monitor feature usage and experiment results
 
-**Ready for production!** This SDK has been tested and validated for enterprise deployment.
+**Ready for production!** This SDK has been tested against 327/327 GrowthBook spec tests and validated for enterprise deployment.

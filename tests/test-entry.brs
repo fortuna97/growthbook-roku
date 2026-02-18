@@ -1,6 +1,5 @@
 
 sub Main()
-    ' The path should be relative to the root of the project
     results = RunCasesJsonTests("pkg:/tests/cases.json")
     
     if results.error <> invalid

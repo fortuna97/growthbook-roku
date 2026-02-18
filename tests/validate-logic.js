@@ -13,6 +13,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
 // Load test cases
 const casesPath = path.join(__dirname, 'cases.json');
@@ -20,6 +21,43 @@ const cases = JSON.parse(fs.readFileSync(casesPath, 'utf8'));
 
 console.log('🧪 GrowthBook BrightScript Logic Validator\n');
 console.log(`Loaded ${Object.keys(cases).length} test categories from cases.json\n`);
+
+// ================================================================
+// Decrypt Function (mirrors BrightScript GrowthBook__decrypt)
+// ================================================================
+
+function decrypt(encryptedStr, keyStr) {
+    try {
+        if (!encryptedStr || !keyStr) return null;
+        
+        // Format: "base64(iv).base64(ciphertext)"
+        const dotIndex = encryptedStr.indexOf('.');
+        if (dotIndex === -1 || dotIndex === 0) return null;
+        
+        const ivStr = encryptedStr.substring(0, dotIndex);
+        const ctStr = encryptedStr.substring(dotIndex + 1);
+        if (!ivStr || !ctStr) return null;
+        
+        // Base64 decode
+        const key = Buffer.from(keyStr, 'base64');
+        const iv = Buffer.from(ivStr, 'base64');
+        const ct = Buffer.from(ctStr, 'base64');
+        
+        // Validate lengths
+        if (key.length !== 16) return null;  // AES-128 requires 16-byte key
+        if (iv.length !== 16) return null;   // CBC IV must be 16 bytes
+        if (ct.length === 0 || ct.length % 16 !== 0) return null;
+        
+        // Decrypt using AES-128-CBC with PKCS7 padding
+        const decipher = crypto.createDecipheriv('aes-128-cbc', key, iv);
+        let decrypted = decipher.update(ct);
+        decrypted = Buffer.concat([decrypted, decipher.final()]);
+        
+        return decrypted.toString('utf8');
+    } catch (e) {
+        return null;
+    }
+}
 
 // ================================================================
 // Mock GrowthBook Implementation (JavaScript version of your BrightScript)
@@ -32,6 +70,8 @@ class GrowthBook {
         this.savedGroups = config.savedGroups || {};
         this.forcedVariations = config.forcedVariations || {};
         this._evaluationStack = [];
+        this.stickyBucketService = config.stickyBucketService || null;
+        this._stickyBucketAssignmentDocs = config.stickyBucketAssignmentDocs || {};
     }
 
     // Evaluate conditions (mirrors your BrightScript implementation)
@@ -624,8 +664,18 @@ class GrowthBook {
             return result;
         }
 
+        // Get hash context
         const hashAttribute = rule.hashAttribute || 'id';
+        let resolvedHashAttr = hashAttribute;
         let hashValue = this._getAttributeValue(hashAttribute);
+        
+        // Fallback attribute support
+        if ((hashValue === null || hashValue === '') && rule.fallbackAttribute) {
+            hashValue = this._getAttributeValue(rule.fallbackAttribute);
+            if (hashValue !== null && hashValue !== '') {
+                resolvedHashAttr = rule.fallbackAttribute;
+            }
+        }
         
         // Skip if required hashAttribute is missing
         if (hashValue === null || hashValue === '') {
@@ -639,28 +689,45 @@ class GrowthBook {
         const seed = rule.seed || rule.key || featureKey;
         const hashVersion = rule.hashVersion || 1;
 
-        // Check namespace exclusion
-        if (rule.namespace) {
-            const [nsId, nsStart, nsEnd] = rule.namespace;
-            const n = this._gbhash('__' + nsId, hashValue, hashVersion);
-            if (n === null || n < nsStart || n >= nsEnd) {
-                return result;
+        // Check sticky bucket FIRST
+        const stickyResult = this._getStickyBucketVariation(rule, resolvedHashAttr, hashValue, featureKey);
+        if (stickyResult.versionIsBlocked) {
+            return result;
+        }
+
+        let variationIndex = -1;
+        let stickyBucketUsed = false;
+
+        if (stickyResult.variation >= 0) {
+            variationIndex = stickyResult.variation;
+            stickyBucketUsed = true;
+        } else {
+            // Check namespace exclusion
+            if (rule.namespace) {
+                const [nsId, nsStart, nsEnd] = rule.namespace;
+                const n = this._gbhash('__' + nsId, hashValue, hashVersion);
+                if (n === null || n < nsStart || n >= nsEnd) {
+                    return result;
+                }
             }
+
+            const coverage = rule.coverage !== undefined ? rule.coverage : 1.0;
+
+            const n = this._gbhash(seed, hashValue, hashVersion);
+            if (n === null) return result;
+
+            if (coverage < 1.0) {
+                if (n > coverage) return result;
+            }
+
+            const ranges = rule.ranges || this._getBucketRanges(rule.variations.length, coverage, rule.weights);
+            variationIndex = this._chooseVariation(n, ranges);
         }
-
-        const coverage = rule.coverage !== undefined ? rule.coverage : 1.0;
-
-        const n = this._gbhash(seed, hashValue, hashVersion);
-        if (n === null) return result;
-
-        if (coverage < 1.0) {
-            if (n > coverage) return result;
-        }
-
-        const ranges = rule.ranges || this._getBucketRanges(rule.variations.length, coverage, rule.weights);
-        const variationIndex = this._chooseVariation(n, ranges);
         
         if (variationIndex === -1) return result;
+
+        // Save sticky bucket assignment
+        this._saveStickyBucketAssignment(rule, resolvedHashAttr, hashValue, variationIndex, featureKey);
 
         result.value = rule.variations[variationIndex];
         result.on = !!result.value;
@@ -668,15 +735,112 @@ class GrowthBook {
         result.source = 'experiment';
         result.ruleId = rule.ruleId || '';
         result.variationIndex = variationIndex;
+        result.stickyBucketUsed = stickyBucketUsed;
         result.experiment = {
             key: rule.key || featureKey,
             variations: rule.variations,
             hashVersion: hashVersion
         };
         if (rule.condition) result.experiment.condition = rule.condition;
-        if (ranges) result.experiment.ranges = ranges;
 
         return result;
+    }
+
+    // Sticky Bucket Logic
+    _getStickyBucketExperimentKey(expKey, bucketVersion) {
+        return `${expKey}__${bucketVersion}`;
+    }
+
+    _getStickyBucketVariation(rule, resolvedHashAttr, hashValue, featureKey) {
+        const result = { variation: -1, versionIsBlocked: false };
+
+        if (!this.stickyBucketService) return result;
+        if (rule.disableStickyBucketing) return result;
+
+        const expKey = rule.key || featureKey;
+        const bucketVersion = rule.bucketVersion || 0;
+        const minBucketVersion = rule.minBucketVersion || 0;
+
+        // Merge assignments: fallback (lower priority) then hash (higher priority)
+        const mergedAssignments = {};
+
+        // 1. Check fallbackAttribute first (lower priority)
+        if (rule.fallbackAttribute) {
+            let fallbackVal = this._getAttributeValue(rule.fallbackAttribute);
+            if (fallbackVal !== null && fallbackVal !== undefined) {
+                if (typeof fallbackVal !== 'string') fallbackVal = String(fallbackVal);
+                if (fallbackVal !== '') {
+                    const fallbackKey = `${rule.fallbackAttribute}||${fallbackVal}`;
+                    const fallbackDoc = this._stickyBucketAssignmentDocs[fallbackKey];
+                    if (fallbackDoc && fallbackDoc.assignments) {
+                        Object.assign(mergedAssignments, fallbackDoc.assignments);
+                    }
+                }
+            }
+        }
+
+        // 2. Check hashAttribute (higher priority)
+        const hashAttr = rule.hashAttribute || 'id';
+        let hashVal = this._getAttributeValue(hashAttr);
+        if (hashVal !== null && hashVal !== undefined) {
+            if (typeof hashVal !== 'string') hashVal = String(hashVal);
+            if (hashVal !== '') {
+                const hashKey = `${hashAttr}||${hashVal}`;
+                const hashDoc = this._stickyBucketAssignmentDocs[hashKey];
+                if (hashDoc && hashDoc.assignments) {
+                    Object.assign(mergedAssignments, hashDoc.assignments);
+                }
+            }
+        }
+
+        if (Object.keys(mergedAssignments).length === 0) return result;
+
+        // Check for blocked versions
+        for (let v = 0; v < minBucketVersion; v++) {
+            const vKey = this._getStickyBucketExperimentKey(expKey, v);
+            if (vKey in mergedAssignments) {
+                result.versionIsBlocked = true;
+                return result;
+            }
+        }
+
+        // Look for current version assignment
+        const currentKey = this._getStickyBucketExperimentKey(expKey, bucketVersion);
+        if (currentKey in mergedAssignments) {
+            result.variation = parseInt(mergedAssignments[currentKey], 10);
+        }
+
+        return result;
+    }
+
+    _saveStickyBucketAssignment(rule, resolvedHashAttr, hashValue, variationIndex, featureKey) {
+        if (!this.stickyBucketService) return;
+        if (rule.disableStickyBucketing) return;
+
+        const expKey = rule.key || featureKey;
+        const bucketVersion = rule.bucketVersion || 0;
+        const assignmentKey = this._getStickyBucketExperimentKey(expKey, bucketVersion);
+        const docKey = `${resolvedHashAttr}||${hashValue}`;
+        const newValue = String(variationIndex);
+
+        // Get existing assignments
+        const existing = this._stickyBucketAssignmentDocs[docKey];
+        const assignments = existing && existing.assignments ? { ...existing.assignments } : {};
+
+        // Skip if already matches
+        if (assignments[assignmentKey] === newValue) return;
+
+        assignments[assignmentKey] = newValue;
+
+        // Update in-memory cache
+        this._stickyBucketAssignmentDocs[docKey] = {
+            attributeName: resolvedHashAttr,
+            attributeValue: hashValue,
+            assignments: assignments
+        };
+
+        // Persist to service
+        this.stickyBucketService.saveAssignments(resolvedHashAttr, hashValue, assignments);
     }
 }
 
@@ -797,6 +961,110 @@ function runTests(category, tests) {
                     process.stdout.write('✗');
                     failures.push({ name, expected: JSON.stringify(expected), actual: JSON.stringify(result) });
                 }
+            } else if (category === 'decrypt') {
+                // decrypt tests: [name, encryptedString, key, expected]
+                const [encryptedStr, key, expected] = rest;
+                result = decrypt(encryptedStr, key);
+                
+                // null expected means error case (should return null)
+                // string expected means successful decryption
+                if (result === expected) {
+                    passed++;
+                    process.stdout.write('✓');
+                } else {
+                    failed++;
+                    process.stdout.write('✗');
+                    failures.push({ name, expected: expected === null ? 'null' : expected, actual: result === null ? 'null' : result });
+                }
+            } else if (category === 'stickyBucket') {
+                // stickyBucket tests: [name, context, initialDocs, featureKey, expectedResult, expectedAssignmentDocs]
+                const [context, initialDocs, featureKey, expectedResult, expectedAssignmentDocs] = rest;
+                
+                // Create in-memory sticky bucket service
+                const stickyService = {
+                    docs: {},
+                    getAssignments(attrName, attrValue) {
+                        return this.docs[`${attrName}||${attrValue}`] || null;
+                    },
+                    saveAssignments(attrName, attrValue, assignments) {
+                        this.docs[`${attrName}||${attrValue}`] = {
+                            attributeName: attrName,
+                            attributeValue: attrValue,
+                            assignments: assignments
+                        };
+                    }
+                };
+                
+                // Build assignment docs cache
+                const assignmentDocs = {};
+                if (context.stickyBucketAssignmentDocs) {
+                    Object.assign(assignmentDocs, context.stickyBucketAssignmentDocs);
+                }
+                
+                // Load initial docs into service; only cache docs matching user's attributes
+                if (initialDocs) {
+                    for (const doc of initialDocs) {
+                        if (doc.attributeName && doc.attributeValue !== undefined) {
+                            const docKey = `${doc.attributeName}||${doc.attributeValue}`;
+                            stickyService.saveAssignments(doc.attributeName, doc.attributeValue, doc.assignments);
+                            // Only cache if user has this attribute with matching value
+                            const userVal = context.attributes ? context.attributes[doc.attributeName] : undefined;
+                            if (userVal !== undefined && userVal !== null && String(userVal) === String(doc.attributeValue)) {
+                                assignmentDocs[docKey] = doc;
+                            }
+                        }
+                    }
+                }
+                
+                const gb = new GrowthBook({
+                    attributes: context.attributes,
+                    features: context.features,
+                    savedGroups: context.savedGroups,
+                    forcedVariations: context.forcedVariations,
+                    stickyBucketService: stickyService,
+                    stickyBucketAssignmentDocs: assignmentDocs
+                });
+                
+                result = gb.evalFeature(featureKey);
+                
+                let match = true;
+                
+                if (expectedResult === null) {
+                    // null means no experiment assignment
+                    if (result.source === 'experiment') match = false;
+                } else {
+                    // Check value
+                    if (!gb._deepEqual(result.value, expectedResult.value)) match = false;
+                    // Check stickyBucketUsed
+                    if (expectedResult.stickyBucketUsed !== undefined) {
+                        if (result.stickyBucketUsed !== expectedResult.stickyBucketUsed) match = false;
+                    }
+                    // Check variationId
+                    if (expectedResult.variationId !== undefined) {
+                        if (result.variationIndex !== expectedResult.variationId) match = false;
+                    }
+                }
+                
+                // Compare assignment docs
+                if (match && expectedAssignmentDocs) {
+                    const actualDocs = gb._stickyBucketAssignmentDocs;
+                    if (!gb._deepEqual(actualDocs, expectedAssignmentDocs)) {
+                        match = false;
+                    }
+                }
+                
+                if (match) {
+                    passed++;
+                    process.stdout.write('✓');
+                } else {
+                    failed++;
+                    process.stdout.write('✗');
+                    failures.push({
+                        name,
+                        expected: JSON.stringify(expectedResult),
+                        actual: JSON.stringify({ value: result.value, stickyBucketUsed: result.stickyBucketUsed, variationIndex: result.variationIndex, source: result.source, docs: gb._stickyBucketAssignmentDocs })
+                    });
+                }
             } else {
                 // Skip tests for categories not yet implemented
                 process.stdout.write('○');
@@ -835,7 +1103,7 @@ function runTests(category, tests) {
 // ================================================================
 
 const results = {};
-const categories = ['evalCondition', 'hash', 'getBucketRange', 'chooseVariation', 'feature'];
+const categories = ['evalCondition', 'hash', 'getBucketRange', 'chooseVariation', 'feature', 'decrypt', 'stickyBucket'];
 
 for (const category of categories) {
     if (cases[category]) {

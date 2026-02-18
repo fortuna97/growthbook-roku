@@ -17,6 +17,8 @@ function GrowthBook(config as object) as object
         trackingCallback: invalid,
         onFeatureUsage: invalid,
         enableDevMode: false,
+        enabled: true,
+        qaMode: false,
         forcedVariations: {},
         
         ' Internal state
@@ -25,6 +27,9 @@ function GrowthBook(config as object) as object
         savedGroups: {},
         _evaluationStack: [],
         _trackedExperiments: {},
+        trackingPlugins: [],
+        stickyBucketService: invalid,
+        _stickyBucketAssignmentDocs: {},
         lastUpdate: 0,
         isInitialized: false,
         
@@ -37,11 +42,13 @@ function GrowthBook(config as object) as object
         isOn: GrowthBook_isOn,
         getFeatureValue: GrowthBook_getFeatureValue,
         evalFeature: GrowthBook_evalFeature,
+        refreshFeatures: GrowthBook_refreshFeatures,
         _loadFeaturesFromAPI: GrowthBook__loadFeaturesFromAPI,
         _parseFeatures: GrowthBook__parseFeatures,
         _evaluateConditions: GrowthBook__evaluateConditions,
         _getAttributeValue: GrowthBook__getAttributeValue,
         _fnv1a32: GrowthBook__fnv1a32,
+        _longToStr: GrowthBook__longToStr,
         _gbhash: GrowthBook__gbhash,
         _paddedVersionString: GrowthBook__paddedVersionString,
         _isIncludedInRollout: GrowthBook__isIncludedInRollout,
@@ -58,6 +65,14 @@ function GrowthBook(config as object) as object
         _isRuleIncluded: GrowthBook__isRuleIncluded,
         _log: GrowthBook__log,
         _hashAttribute: GrowthBook__hashAttribute,
+        _decrypt: GrowthBook__decrypt,
+        _notifyPlugins: GrowthBook__notifyPlugins,
+        _getStickyBucketExperimentKey: GrowthBook__getStickyBucketExperimentKey,
+        _getStickyBucketVariation: GrowthBook__getStickyBucketVariation,
+        _saveStickyBucketAssignment: GrowthBook__saveStickyBucketAssignment,
+        
+        ' Public API
+        registerTrackingPlugin: GrowthBook_registerTrackingPlugin,
         
         ' Helpers (exposed for internal use)
         toBoolean: GrowthBook_toBoolean
@@ -86,6 +101,12 @@ function GrowthBook(config as object) as object
         if config.enableDevMode <> invalid
             instance.enableDevMode = config.enableDevMode
         end if
+        if config.enabled <> invalid
+            instance.enabled = config.enabled
+        end if
+        if config.qaMode <> invalid
+            instance.qaMode = config.qaMode
+        end if
         if config.features <> invalid
             instance.cachedFeatures = config.features
             instance.isInitialized = true
@@ -95,6 +116,46 @@ function GrowthBook(config as object) as object
         end if
         if config.forcedVariations <> invalid
             instance.forcedVariations = config.forcedVariations
+        end if
+        ' Parse URL for forced variations (e.g. ?my-experiment=1)
+        if config.url <> invalid
+            ' content.url might be available
+            qs = ""
+            urlParts = config.url.Split("?")
+            if urlParts.Count() > 1
+                qs = urlParts[1]
+                ' Remove anchor if present
+                anchorParts = qs.Split("#")
+                if anchorParts.Count() > 0 then qs = anchorParts[0]
+                
+                ' Parse query string
+                pairs = qs.Split("&")
+                for each pair in pairs
+                    kv = pair.Split("=")
+                    if kv.Count() = 2
+                        key = kv[0]
+                        ' Decode URI component if needed? standard generic parsing usually enough for simple keys
+                        ' Check if value is integer
+                        valStr = kv[1]
+                        valInt = Val(valStr) 
+                        ' Val() returns 0 if not a number, but "0" is also 0. 
+                        ' Valid variations are integers.
+                        ' We need to know if it's a valid integer string.
+                        ' Regex check or just permissive Val()
+                        ' GrowthBook spec: value should be index of variation
+                        instance.forcedVariations[key] = valInt
+                    end if
+                end for
+            end if
+        end if
+        if config.trackingPlugins <> invalid
+            instance.trackingPlugins = config.trackingPlugins
+        end if
+        if config.stickyBucketService <> invalid
+            instance.stickyBucketService = config.stickyBucketService
+        end if
+        if config.stickyBucketAssignmentDocs <> invalid
+            instance._stickyBucketAssignmentDocs = config.stickyBucketAssignmentDocs
         end if
     end if
     
@@ -111,11 +172,10 @@ function GrowthBook(config as object) as object
         end try
     end if
     
-    
     if instance.http <> invalid and type(instance.http) = "roURLTransfer"
         instance.http.SetCertificatesFile("common:/certs/ca-bundle.crt")
         instance.http.AddHeader("Content-Type", "application/json")
-        instance.http.AddHeader("User-Agent", "GrowthBook-Roku/1.3.0")
+        instance.http.AddHeader("User-Agent", "GrowthBook-Roku/2.0.0")
     end if
     
     return instance
@@ -207,34 +267,73 @@ function GrowthBook__loadFeaturesFromAPI() as boolean
 end function
 
 ' ===================================================================
-' Parse features from JSON response
+' Parse features from JSON response (supports encrypted payloads)
 ' ===================================================================
 function GrowthBook__parseFeatures(json as string) as object
     if json = ""
         return invalid
     end if
     
-    ' Simple JSON parser for feature response
-    ' GrowthBook API returns: { "features": { "key": {...}, ... } }
-    
     ' Use Roku's built-in JSON parsing
     root = ParseJson(json)
     
-    if root <> invalid and root.features <> invalid
+    if root = invalid
+        m._log("ERROR: Failed to parse features JSON")
+        return invalid
+    end if
+    
+    ' Check for encrypted features
+    if root.encryptedFeatures <> invalid and root.encryptedFeatures <> ""
+        if m.decryptionKey <> invalid and m.decryptionKey <> ""
+            decrypted = m._decrypt(root.encryptedFeatures, m.decryptionKey)
+            if decrypted <> ""
+                decryptedFeatures = ParseJson(decrypted)
+                if decryptedFeatures <> invalid
+                    m.features = decryptedFeatures
+                else
+                    m._log("ERROR: Failed to parse decrypted features")
+                    return invalid
+                end if
+            else
+                m._log("ERROR: Failed to decrypt encryptedFeatures")
+                return invalid
+            end if
+        else
+            m._log("ERROR: encryptedFeatures present but no decryptionKey provided")
+            return invalid
+        end if
+    end if
+
+    ' Handle encrypted saved groups
+    if root.encryptedSavedGroups <> invalid and root.encryptedSavedGroups <> "" and m.decryptionKey <> invalid and m.decryptionKey <> ""
+        decrypted = m._decrypt(root.encryptedSavedGroups, m.decryptionKey)
+        if decrypted <> ""
+            decryptedGroups = ParseJson(decrypted)
+            if decryptedGroups <> invalid
+                m.savedGroups = decryptedGroups
+            end if
+        end if
+    end if
+
+    ' Handle saved groups from response (only if not encrypted)
+    if root.encryptedSavedGroups = invalid and root.savedGroups <> invalid
+        m.savedGroups = root.savedGroups
+    end if
+    
+    ' Handle unencrypted features (only if not encrypted)
+    if root.encryptedFeatures = invalid and root.features <> invalid
         m.features = root.features
-        return root.features
+        return m.features
+    end if
+
+    ' If we processed encryptedFeatures successfully, return them (even if empty)
+    if root.encryptedFeatures <> invalid and root.encryptedFeatures <> ""
+        return m.features
     end if
     
     ' Fallback: assume the response is already features object
-    features = ParseJson(json)
-    if features <> invalid
-        m.features = features
-        return features
-    end if
-    
-    m._log("ERROR: Failed to parse features JSON")
-    
-    return invalid
+    m.features = root
+    return root
 end function
 
 ' ===================================================================
@@ -306,7 +405,8 @@ function GrowthBook_evalFeature(key as string) as object
         source: "unknownFeature",
         ruleId: "",
         experimentId: "",
-        variationId: invalid
+        variationId: -1,
+        stickyBucketUsed: false
     }
     
     ' Check for cyclic prerequisites
@@ -406,25 +506,6 @@ function GrowthBook_evalFeature(key as string) as object
                         
                         ' 4. Experiment Rule
                         if rule.variations <> invalid
-                            ' Forced Variations check
-                            if m.forcedVariations <> invalid and m.forcedVariations[key] <> invalid
-                                forcedIndex = m.forcedVariations[key]
-                                if forcedIndex >= 0 and forcedIndex < rule.variations.Count()
-                                    result.value = rule.variations[forcedIndex]
-                                    result.on = GrowthBook_toBoolean(result.value)
-                                    result.off = not result.on
-                                    result.source = "experiment"
-                                    if rule.ruleId <> invalid 
-                                        result.ruleId = rule.ruleId
-                                    else if rule.id <> invalid
-                                        result.ruleId = rule.id
-                                    end if
-                                    m._evaluationStack.Pop()
-                                    m._trackFeatureUsage(key, result)
-                                    return result
-                                end if
-                            end if
-                            
                             expResult = m._evaluateExperiment(rule, result)
                             if expResult.source = "experiment"
                                 ' Check for passthrough meta
@@ -470,65 +551,215 @@ end function
 ' Evaluate experiment variations
 ' ===================================================================
 function GrowthBook__evaluateExperiment(rule as object, result as object) as object
-    if rule.variations = invalid or rule.variations.Count() = 0
+    ' 1. Variations count check
+    if rule.variations = invalid or rule.variations.Count() < 2
         return result
     end if
     
-    ' Get hashing context
+    ' 2. Global enabled check
+    if m.enabled = false
+        m._log("GrowthBook is globally disabled")
+        return result
+    end if
+
+    ' 3. URL forced variations (querystring)
+    ' (Implementation in init or elsewhere, but we check m.forcedVariations here)
+    experimentKey = result.key
+    if rule.key <> invalid then experimentKey = rule.key
+    
+    ' 4. Forced Variations (Global)
+    if m.forcedVariations <> invalid and experimentKey <> invalid and m.forcedVariations[experimentKey] <> invalid
+        forcedIndex = m.forcedVariations[experimentKey]
+        if forcedIndex >= 0 and forcedIndex < rule.variations.Count()
+            m._log("Forced variation (global): " + Str(forcedIndex).Trim())
+            result.variationId = forcedIndex
+            result.value = rule.variations[forcedIndex]
+            result.on = GrowthBook_toBoolean(result.value)
+            result.off = not result.on
+            result.source = "experiment"
+            if rule.ruleId <> invalid 
+                result.ruleId = rule.ruleId
+            else if rule.id <> invalid
+                result.ruleId = rule.id
+            end if
+            if rule.key <> invalid
+                result.experimentId = rule.key
+            end if
+            m._trackExperiment(rule, result)
+            return result
+        else
+            ' Forced variation out of bounds, skip experiment
+            m._log("Forced variation out of bounds (global): " + Str(forcedIndex).Trim())
+            return result
+        end if
+    end if
+
+    ' 5. Active check
+    if rule.active = false
+        m._log("Experiment is inactive")
+        return result
+    end if
+
+    ' 6. Get hashing context and value
     context = m._getHashContext(rule, result.key)
     if not context.success then return result
     
-    ' Get coverage (defaults to 1.0 = 100%)
-    coverage = 1.0
-    if rule.coverage <> invalid then coverage = rule.coverage
-    
-    ' Calculate hash with seed (returns 0-1)
+    ' 7. Sticky Bucket Lookup
+    stickyResult = m._getStickyBucketVariation(rule, result.key)
+    assigned = stickyResult.variation
+    stickyBucketVersionIsBlocked = stickyResult.versionIsBlocked
+    foundStickyBucket = (assigned >= 0)
+
+    if foundStickyBucket
+        m._log("Found sticky bucket for experiment, variation: " + Str(assigned).Trim())
+    else
+        ' 8. Filters/Namespace/Condition Check (if no sticky)
+        ' Filters and Namespace check (Rule inclusion)
+        if not m._isRuleIncluded(rule, result.key)
+            m._log("Experiment rule filtered out (inclusion)")
+            return result
+        end if
+
+        ' Condition check
+        if rule.condition <> invalid
+            if not m._evaluateConditions(rule.condition)
+                m._log("Experiment conditions failed")
+                return result
+            end if
+        end if
+
+        ' 8.1 Parent Conditions / Prerequisites (Prerequisites)
+        if rule.parentConditions <> invalid
+            for each parent in rule.parentConditions
+                parentResult = m.evalFeature(parent.id)
+                if parentResult.source = "cyclicPrerequisite"
+                    m._log("Cyclic prerequisite detected")
+                    return result
+                end if
+                
+                gateFailed = (GrowthBook_toBoolean(parent.gate) and not parentResult.on)
+                conditionFailed = false
+                if parent.condition <> invalid
+                    tempGB = GrowthBook({ attributes: { value: parentResult.value }, savedGroups: m.savedGroups, http: m.http })
+                    if not tempGB._evaluateConditions(parent.condition) then conditionFailed = true
+                end if
+                
+                if gateFailed or conditionFailed
+                    m._log("Prerequisite failed")
+                    return result
+                end if
+            end for
+        end if
+        
+        ' 8.2 Groups check
+        if rule.groups <> invalid and rule.groups.Count() > 0
+            userGroups = m.attributes.groups
+            if userGroups = invalid then userGroups = {}
+            matched = false
+            for each g in rule.groups
+                if userGroups[g] = true
+                    matched = true
+                    exit for
+                end if
+            end for
+            if not matched
+                m._log("User not in required groups")
+                return result
+            end if
+        end if
+
+        ' Condition check
+        if rule.condition <> invalid
+            if not m._evaluateConditions(rule.condition)
+                m._log("Experiment conditions failed")
+                return result
+            end if
+        end if
+    end if
+
+    ' 9. Hash calculation and assignment
     n = m._gbhash(context.seed, context.hashValue, context.hashVersion)
     if n = invalid
+        m._log("Invalid hash version")
         return result
     end if
-    
-    ' Use provided ranges if available, otherwise calculate from coverage/weights
-    ranges = rule.ranges
-    if ranges = invalid
-        ' Get weights from rule level
-        weights = rule.weights
-        
-        ' Get bucket ranges using coverage and weights
-        ranges = m._getBucketRanges(rule.variations.Count(), coverage, weights)
+
+    if not foundStickyBucket
+        if rule.ranges <> invalid
+            ranges = rule.ranges
+        else
+            coverage = 1.0
+            if rule.coverage <> invalid then coverage = rule.coverage
+            ranges = m._getBucketRanges(rule.variations.Count(), coverage, rule.weights)
+        end if
+        assigned = m._chooseVariation(n, ranges)
     end if
-    
-    ' Choose variation based on hash and bucket ranges
-    variationIndex = m._chooseVariation(n, ranges)
-    m._log("Variation selected: " + Str(variationIndex).Trim() + " (hash=" + Str(n).Trim() + ")")
-    
-    ' If no variation found (user outside buckets), return default
-    if variationIndex < 0
+
+    ' 10. Unenroll if sticky bucket version blocked
+    if stickyBucketVersionIsBlocked
+        m._log("Sticky bucket version blocked")
+        result.stickyBucketUsed = true
         return result
     end if
+
+    ' 11. Not in experiment
+    if assigned < 0
+        m._log("User not in experiment rollout")
+        return result
+    end if
+
+    ' 12. Experiment Rule Force
+    if rule.force <> invalid
+        assigned = rule.force
+        ' If forced, we skip QA mode check and go straight to result construction
+    else
+        ' 13. QA Mode check (only if not forced)
+        if m.qaMode = true
+            m._log("GrowthBook is in QA mode, skipping")
+            return result
+        end if
+    end if
+
+    ' 14. Build results
+    inExperiment = true
+    if assigned < 0 or assigned >= rule.variations.Count()
+        assigned = -1
+        inExperiment = false
+    end if
+
+    if assigned >= 0
+        result.value = rule.variations[assigned]
+        result.on = GrowthBook_toBoolean(result.value)
+        result.off = not result.on
+        result.variationId = assigned
+    end if
     
-    ' User is assigned to a variation
-    result.value = rule.variations[variationIndex]
-    result.on = GrowthBook_toBoolean(rule.variations[variationIndex])
-    result.off = not result.on
-    result.variationId = variationIndex
+    result.inExperiment = inExperiment
     result.source = "experiment"
+    result.hashUsed = true
+    result.bucket = n
+    if stickyResult.variation >= 0 then result.stickyBucketUsed = true
+    
+    ' 14.5 Persist sticky bucket
+    if inExperiment and (result.stickyBucketUsed <> true or stickyResult.source = "fallback")
+        m._saveStickyBucketAssignment(rule, context, assigned, result.key)
+    end if
     
     if rule.ruleId <> invalid 
         result.ruleId = rule.ruleId
     else if rule.id <> invalid
         result.ruleId = rule.id
     end if
-    
     if rule.key <> invalid
         result.experimentId = rule.key
     end if
-    
-    ' Track the experiment if callback is set
+
+    ' 15. Tracking
     m._trackExperiment(rule, result)
     
     return result
 end function
+
 
 ' ===================================================================
 ' Set user attributes for targeting and experiments
@@ -539,6 +770,25 @@ sub GrowthBook_setAttributes(attrs as object)
         m._log("Attributes updated")
     end if
 end sub
+
+' ===================================================================
+' Refresh features from the GrowthBook API
+' Call this when you want to fetch updated features on-demand
+' Note: BrightScript is single-threaded, so automatic polling is not possible
+' ===================================================================
+function GrowthBook_refreshFeatures() as boolean
+    if m.clientKey = "" or m.clientKey = invalid
+        m._log("ERROR: clientKey required for refresh")
+        return false
+    end if
+    
+    if m.http = invalid
+        m._log("ERROR: HTTP not available")
+        return false
+    end if
+    
+    return m._loadFeaturesFromAPI()
+end function
 
 ' ===================================================================
 ' Get attribute value (supports nested paths like "user.age")
@@ -806,11 +1056,28 @@ function GrowthBook__evaluateConditions(condition as object) as boolean
                 if value = invalid or (type(value) <> "roString" and type(value) <> "String")
                     return false
                 end if
-                ' Use CreateObject("roRegex") for pattern matching
-                regex = CreateObject("roRegex", condition_value["$regex"], "i")
-                if regex = invalid or not regex.IsMatch(value)
+                pattern = condition_value["$regex"]
+                if type(pattern) <> "roString" and type(pattern) <> "String"
                     return false
                 end if
+                ' Reject patterns with invalid quantifier sequences (crashes roRegex)
+                firstChar = Left(pattern, 1)
+                if firstChar = "?" or firstChar = "*" or firstChar = "+"
+                    return false
+                end if
+                if Instr(1, pattern, "**") > 0 or Instr(1, pattern, "++") > 0 or Instr(1, pattern, "???") > 0
+                    return false
+                end if
+                ' Use CreateObject("roRegex") for pattern matching
+                try
+                    regex = CreateObject("roRegex", pattern, "i")
+                    if regex = invalid or not regex.IsMatch(value)
+                        return false
+                    end if
+                catch e
+                    ' Invalid regex pattern - fail the condition
+                    return false
+                end try
             end if
             if condition_value["$elemMatch"] <> invalid
                 ' Array element matching
@@ -997,15 +1264,30 @@ function GrowthBook__fnv1a32(str as string) as longinteger
     
     ' Process each character
     for i = 0 to str.Len() - 1
-        charCode = Asc(Mid(str, i + 1, 1))
-        ' Bitwise XOR implementation: (a AND NOT b) OR (NOT a AND b)
-        temp1& = hval& AND (NOT charCode)
-        temp2& = (NOT hval&) AND charCode
-        hval& = temp1& OR temp2&
-        hval& = (hval& * prime&) and &hFFFFFFFF&  ' Keep 32-bit
+        charCode& = Asc(Mid(str, i + 1, 1))
+        ' Bitwise XOR: (a OR b) - (a AND b)
+        hval& = (hval& OR charCode&) - (hval& AND charCode&)
+        hval& = (hval& * prime&) AND &hFFFFFFFF&  ' Keep 32-bit
     end for
     
     return hval&
+end function
+
+' ===================================================================
+' Convert LongInteger to string without using Str()
+' Avoids Str() coercing LongInteger to Float (32-bit),
+' which loses precision for values > 7 significant digits
+' ===================================================================
+function GrowthBook__longToStr(val as longinteger) as string
+    if val = 0 then return "0"
+    result = ""
+    remaining& = val
+    while remaining& > 0
+        digit% = remaining& mod 10
+        result = Chr(48 + digit%) + result
+        remaining& = remaining& \ 10
+    end while
+    return result
 end function
 
 ' ===================================================================
@@ -1026,18 +1308,17 @@ function GrowthBook__gbhash(seed as string, value as string, version as integer)
         ' Version 2: fnv1a32(str(fnv1a32(seed + value)))
         combined = seed + value
         hash1& = m._fnv1a32(combined)
-        hash2& = m._fnv1a32(Str(hash1&).Trim())
-        return (hash2& mod 10000) / 10000.0
+        hash2& = m._fnv1a32(m._longToStr(hash1&))
+        return (hash2& MOD 10000) / 10000.0
     else if version = 1
         ' Version 1: fnv1a32(value + seed)
         combined = value + seed
         hash1& = m._fnv1a32(combined)
-        return (hash1& mod 1000) / 1000.0
+        return (hash1& MOD 1000) / 1000.0
     end if
     
     return invalid
 end function
-
 
 ' ===================================================================
 ' Version string padding for semantic version comparison
@@ -1309,10 +1590,6 @@ end function
 ' Track experiment exposure (with de-duplication)
 ' ===================================================================
 sub GrowthBook__trackExperiment(experiment as object, result as object)
-    if m.trackingCallback = invalid
-        return
-    end if
-    
     ' Build unique tracking key to prevent duplicate tracking
     hashAttribute = "id"
     if experiment.hashAttribute <> invalid then hashAttribute = experiment.hashAttribute
@@ -1338,7 +1615,7 @@ sub GrowthBook__trackExperiment(experiment as object, result as object)
     
     trackingKey = hashAttribute + "|" + hashValue + "|" + experimentKey + "|" + variationId
     
-    ' Skip if already tracked
+    ' Skip if already tracked (applies to both callback and plugins)
     if m._trackedExperiments.DoesExist(trackingKey)
         return
     end if
@@ -1346,8 +1623,13 @@ sub GrowthBook__trackExperiment(experiment as object, result as object)
     ' Mark as tracked
     m._trackedExperiments[trackingKey] = true
     
-    ' Call the tracking callback
-    m.trackingCallback(experiment, result)
+    ' Call the tracking callback if set
+    if m.trackingCallback <> invalid
+        m.trackingCallback(experiment, result)
+    end if
+    
+    ' Notify tracking plugins
+    m._notifyPlugins("experimentViewed", { experiment: experiment, result: result })
 end sub
 
 ' ===================================================================
@@ -1361,19 +1643,47 @@ function GrowthBook__inNamespace(userId as string, namespace as object) as boole
     n = m._gbhash(namespace[0], userId, 1)
     if n = invalid then return false
     
-    return n >= namespace[1] and n < namespace[2]
+    res = (n >= namespace[1] and n < namespace[2])
+    return res
 end function
 
 ' ===================================================================
 ' Track feature usage (called on every feature evaluation)
 ' ===================================================================
 sub GrowthBook__trackFeatureUsage(featureKey as string, result as object)
-    if m.onFeatureUsage = invalid
-        return
+    ' Call the feature usage callback if set
+    if m.onFeatureUsage <> invalid
+        m.onFeatureUsage(featureKey, result)
     end if
     
-    ' Call the feature usage callback
-    m.onFeatureUsage(featureKey, result)
+    ' Notify tracking plugins
+    m._notifyPlugins("featureUsage", { featureKey: featureKey, result: result })
+end sub
+
+' ===================================================================
+' Notify tracking plugins of events
+' ===================================================================
+sub GrowthBook__notifyPlugins(eventType as string, data as object)
+    for each plugin in m.trackingPlugins
+        if eventType = "experimentViewed" and plugin.onExperimentViewed <> invalid
+            plugin.onExperimentViewed(data.experiment, data.result)
+        else if eventType = "featureUsage" and plugin.onFeatureUsage <> invalid
+            plugin.onFeatureUsage(data.featureKey, data.result)
+        end if
+    end for
+end sub
+
+' ===================================================================
+' Register a tracking plugin for event notifications
+' ===================================================================
+sub GrowthBook_registerTrackingPlugin(plugin as object)
+    if type(plugin) = "roAssociativeArray"
+        m.trackingPlugins.Push(plugin)
+        ' Initialize plugin if it has an init method
+        if plugin.init <> invalid
+            plugin.init(m)
+        end if
+    end if
 end sub
 
 ' ===================================================================
@@ -1397,6 +1707,7 @@ end function
 
 ' ===================================================================
 ' Get Hash Context (helper for filters and experiments)
+' Supports fallbackAttribute for sticky bucketing prerequisites
 ' ===================================================================
 function GrowthBook__getHashContext(rule as object, featureKey as string) as object
     ' Get hash attribute (default to "id")
@@ -1418,13 +1729,30 @@ function GrowthBook__getHashContext(rule as object, featureKey as string) as obj
         context.hashAttribute = rule.hashAttribute
     end if
     
-    ' 2. Hash Value
+    ' 2. Hash Value - try primary attribute first
     val = m._getAttributeValue(context.hashAttribute)
     if val <> invalid
         if type(val) = "roString" or type(val) = "String"
             context.hashValue = val
         else
             context.hashValue = Str(val).Trim()
+        end if
+    end if
+    
+    ' 2b. FALLBACK - if primary value empty, try fallbackAttribute
+    ' This is used for sticky bucketing when the primary hash attribute is not available
+    if context.hashValue = "" and rule.fallbackAttribute <> invalid and rule.fallbackAttribute <> ""
+        val = m._getAttributeValue(rule.fallbackAttribute)
+        if val <> invalid
+            if type(val) = "roString" or type(val) = "String"
+                context.hashValue = val
+            else
+                context.hashValue = Str(val).Trim()
+            end if
+            ' Only update hashAttribute if we successfully got a fallback value
+            if context.hashValue <> ""
+                context.hashAttribute = rule.fallbackAttribute
+            end if
         end if
     end if
     
@@ -1451,7 +1779,7 @@ end function
 ' ===================================================================
 function GrowthBook__isRuleIncluded(rule as object, featureKey as string) as boolean
     ' If no hashing logic needed, it's included
-    if rule.coverage = invalid and rule.range = invalid and rule.filters = invalid and (rule.hashVersion = invalid or rule.hashVersion = 1)
+    if rule.coverage = invalid and rule.range = invalid and rule.ranges = invalid and rule.filters = invalid and rule.namespace = invalid and (rule.hashVersion = invalid or rule.hashVersion = 1)
         return true
     end if
     
@@ -1463,7 +1791,28 @@ function GrowthBook__isRuleIncluded(rule as object, featureKey as string) as boo
         for each filter in rule.filters
             filterSeed = featureKey
             if filter.seed <> invalid then filterSeed = filter.seed
-            n = m._gbhash(filterSeed, context.hashValue, context.hashVersion)
+            version = 2
+            if filter.hashVersion <> invalid then version = filter.hashVersion
+            
+            ' Determine which attribute to use for this filter
+            filterAttr = "id"
+            if filter.attribute <> invalid and filter.attribute <> ""
+                filterAttr = filter.attribute
+            else if rule.hashAttribute <> invalid and rule.hashAttribute <> ""
+                filterAttr = rule.hashAttribute
+            end if
+            
+            filterVal = m._getAttributeValue(filterAttr)
+            if filterVal = invalid then return false
+            filterValStr = ""
+            if type(filterVal) = "roString" or type(filterVal) = "String"
+                filterValStr = filterVal
+            else
+                filterValStr = Str(filterVal).Trim()
+            end if
+            if filterValStr = "" return false
+            
+            n = m._gbhash(filterSeed, filterValStr, version)
             if n = invalid return false
             
             inAnyRange = false
@@ -1475,18 +1824,33 @@ function GrowthBook__isRuleIncluded(rule as object, featureKey as string) as boo
             end for
             if not inAnyRange return false
         end for
-    else
-        ' 2. Standard Rollout/Range
+        
+        ' If filters matched, return true and IGNORE standard rollout/namespace
+        return true
+    end if
+    
+    ' 2. Standard Rollout/Range/Namespace (Only if no filters)
+    if rule.namespace <> invalid
+        if not m._inNamespace(context.hashValue, rule.namespace) return false
+    end if
+    
+    if rule.range <> invalid
         n = m._gbhash(context.seed, context.hashValue, context.hashVersion)
-        if n = invalid return false
-        
-        if rule.coverage <> invalid and rule.coverage = 0 return false
-        
-        if rule.range <> invalid
-            if not m._inRange(n, rule.range) return false
-        else if rule.coverage <> invalid
-            if n > rule.coverage return false
-        end if
+        if n = invalid or not m._inRange(n, rule.range) return false
+    else if rule.ranges <> invalid
+        n = m._gbhash(context.seed, context.hashValue, context.hashVersion)
+        inAnyRange = false
+        for each rng in rule.ranges
+            if n = invalid then exit for
+            if m._inRange(n, rng)
+                inAnyRange = true
+                exit for
+            end if
+        end for
+        if not inAnyRange return false
+    else if rule.coverage <> invalid and rule.variations = invalid
+        n = m._gbhash(context.seed, context.hashValue, context.hashVersion)
+        if n = invalid or n >= rule.coverage return false
     end if
     
     return true
@@ -1519,4 +1883,395 @@ function GrowthBook_toBoolean(value as dynamic) as boolean
     
     ' Other objects (AA, Array) are truthy
     return true
+end function
+
+' ===================================================================
+' AES-128-CBC Decryption for Encrypted Feature Payloads
+' Requires Roku OS 9.2+ for roEVPCipher support
+' ===================================================================
+function GrowthBook__decrypt(encryptedStr as string, keyStr as string) as string
+    ' Validate inputs
+    if encryptedStr = "" or keyStr = "" then return ""
+    
+    ' Format: "base64(iv).base64(ciphertext)"
+    dotIndex = Instr(1, encryptedStr, ".")
+    if dotIndex = 0 or dotIndex = 1 then return ""
+    
+    ivStr = Left(encryptedStr, dotIndex - 1)
+    ctStr = Mid(encryptedStr, dotIndex + 1)
+    if ivStr = "" or ctStr = "" then return ""
+    
+    ' Base64 decode all components
+    keyBytes = CreateObject("roByteArray")
+    ivBytes = CreateObject("roByteArray")
+    ctBytes = CreateObject("roByteArray")
+    
+    ' Decode key - FromBase64String may silently fail on invalid input
+    keyBytes.FromBase64String(keyStr)
+    if keyBytes.Count() = 0
+        m._log("ERROR: Invalid or empty base64 key")
+        return ""
+    end if
+    
+    ' Decode IV
+    ivBytes.FromBase64String(ivStr)
+    if ivBytes.Count() = 0
+        m._log("ERROR: Invalid or empty base64 IV")
+        return ""
+    end if
+    
+    ' Decode ciphertext
+    ctBytes.FromBase64String(ctStr)
+    if ctBytes.Count() = 0
+        m._log("ERROR: Invalid or empty base64 ciphertext")
+        return ""
+    end if
+    
+    ' Validate AES-128 requirements
+    ' Key must be 16 bytes (128 bits)
+    if keyBytes.Count() <> 16
+        m._log("ERROR: Key must be 16 bytes for AES-128")
+        return ""
+    end if
+    
+    ' IV must be 16 bytes (block size)
+    if ivBytes.Count() <> 16
+        m._log("ERROR: IV must be 16 bytes")
+        return ""
+    end if
+    
+    ' Ciphertext must be non-empty and multiple of block size
+    if ctBytes.Count() = 0 or ctBytes.Count() mod 16 <> 0
+        m._log("ERROR: Invalid ciphertext length")
+        return ""
+    end if
+    
+    ' Create cipher (requires Roku OS 9.2+)
+    cipher = CreateObject("roEVPCipher")
+    if cipher = invalid
+        m._log("ERROR: roEVPCipher not available (requires Roku OS 9.2+)")
+        return ""
+    end if
+    
+    ' Cipher operations wrapped in try/catch for platform compatibility
+    ' (some environments may not support roByteArray args for roEVPCipher)
+    try
+        ' Setup: false=decrypt, aes-128-cbc algorithm, key, iv, padding=1 (PKCS7)
+        if not cipher.Setup(false, "aes-128-cbc", keyBytes, ivBytes, 1)
+            m._log("ERROR: Cipher setup failed")
+            return ""
+        end if
+        
+        ' Process the encrypted data
+        decrypted = cipher.Process(ctBytes)
+        if decrypted = invalid
+            m._log("ERROR: Decryption failed")
+            return ""
+        end if
+        
+        ' Get final block (handles PKCS7 padding removal)
+        finalBlock = cipher.Final()
+        if finalBlock <> invalid and finalBlock.Count() > 0
+            decrypted.Append(finalBlock)
+        end if
+        
+        if decrypted.Count() = 0 then return ""
+        
+        return decrypted.ToAsciiString()
+    catch e
+        m._log("ERROR: Cipher operation failed - " + e.message)
+        return ""
+    end try
+end function
+
+' ===================================================================
+' GrowthBook Tracking Plugin - Built-in Data Warehouse Integration
+' Batches experiment and feature events, sends via HTTP POST
+' ===================================================================
+function GrowthBookTrackingPlugin(config as object) as object
+    instance = {
+        ' Configuration
+        ingestorHost: "",
+        clientKey: "",
+        batchSize: 10,
+        
+        ' State
+        eventQueue: [],
+        http: invalid,
+        
+        ' Methods
+        init: GrowthBookTrackingPlugin_init,
+        onExperimentViewed: GrowthBookTrackingPlugin_onExperimentViewed,
+        onFeatureUsage: GrowthBookTrackingPlugin_onFeatureUsage,
+        flush: GrowthBookTrackingPlugin_flush
+    }
+    
+    if config.ingestorHost <> invalid then instance.ingestorHost = config.ingestorHost
+    if config.clientKey <> invalid then instance.clientKey = config.clientKey
+    if config.batchSize <> invalid then instance.batchSize = config.batchSize
+    
+    return instance
+end function
+
+sub GrowthBookTrackingPlugin_init(gb as object)
+    if gb.http <> invalid
+        m.http = gb.http
+    else
+        try
+            m.http = CreateObject("roURLTransfer")
+            m.http.SetCertificatesFile("common:/certs/ca-bundle.crt")
+        catch e
+            m.http = invalid
+        end try
+    end if
+end sub
+
+sub GrowthBookTrackingPlugin_onExperimentViewed(experiment as object, result as object)
+    event = {
+        event_type: "experiment_viewed",
+        timestamp: CreateObject("roDateTime").AsSeconds(),
+        experiment_id: experiment.key,
+        variation_id: result.variationId
+    }
+    m.eventQueue.Push(event)
+    
+    if m.eventQueue.Count() >= m.batchSize
+        m.flush()
+    end if
+end sub
+
+sub GrowthBookTrackingPlugin_onFeatureUsage(featureKey as string, result as object)
+    event = {
+        event_type: "feature_evaluated",
+        timestamp: CreateObject("roDateTime").AsSeconds(),
+        feature_key: featureKey,
+        value: result.value,
+        source: result.source
+    }
+    m.eventQueue.Push(event)
+    
+    if m.eventQueue.Count() >= m.batchSize
+        m.flush()
+    end if
+end sub
+
+sub GrowthBookTrackingPlugin_flush()
+    if m.eventQueue.Count() = 0 then return
+    if m.http = invalid then return
+    if m.ingestorHost = "" then return
+    
+    payload = FormatJson({
+        events: m.eventQueue,
+        clientKey: m.clientKey
+    })
+    
+    m.http.SetUrl(m.ingestorHost + "/events")
+    m.http.AsyncPostFromString(payload)
+    
+    m.eventQueue = []
+end sub
+
+' ===================================================================
+' Sticky Bucket Logic
+' ===================================================================
+
+' Build the sticky bucket experiment key: "expKey__bucketVersion"
+function GrowthBook__getStickyBucketExperimentKey(expKey as string, bucketVersion as integer) as string
+    return expKey + "__" + Str(bucketVersion).Trim()
+end function
+
+' Look up sticky bucket variation from cached assignment docs
+' Checks both hashAttribute (higher priority) and fallbackAttribute (lower priority)
+' Returns { variation: integer, versionIsBlocked: boolean }
+function GrowthBook__getStickyBucketVariation(rule as object, featureKey as string) as object
+    result = { variation: -1, versionIsBlocked: false, source: "none" }
+    
+    if m.stickyBucketService = invalid then return result
+    if rule.disableStickyBucketing = true then return result
+    
+    ' Determine the experiment key
+    expKey = rule.key
+    if expKey = invalid or expKey = "" then expKey = featureKey
+    
+    bucketVersion = 0
+    if rule.bucketVersion <> invalid then bucketVersion = rule.bucketVersion
+    minBucketVersion = 0
+    if rule.minBucketVersion <> invalid then minBucketVersion = rule.minBucketVersion
+    
+    assignments = {}
+    source = "none"
+    
+    ' 1. Check Primary (hashAttribute) first - HIGHER priority
+    hashAttr = "id"
+    if rule.hashAttribute <> invalid and rule.hashAttribute <> "" then hashAttr = rule.hashAttribute
+    attrVal = m._getAttributeValue(hashAttr)
+    if attrVal <> invalid
+        valStr = ""
+        if type(attrVal) = "roString" or type(attrVal) = "String" then valStr = attrVal else valStr = Str(attrVal).Trim()
+        if valStr <> ""
+            doc = m._stickyBucketAssignmentDocs[hashAttr + "||" + valStr]
+            if doc <> invalid and doc.assignments <> invalid
+                assignments = doc.assignments
+                source = "primary"
+            end if
+        end if
+    end if
+    
+    ' 2. Check Fallback if not found in primary
+    currentKey = m._getStickyBucketExperimentKey(expKey, bucketVersion)
+    foundInPrimary = assignments.DoesExist(currentKey)
+    
+    if not foundInPrimary and rule.fallbackAttribute <> invalid and rule.fallbackAttribute <> ""
+        attrVal = m._getAttributeValue(rule.fallbackAttribute)
+        if attrVal <> invalid
+            valStr = ""
+            if type(attrVal) = "roString" or type(attrVal) = "String" then valStr = attrVal else valStr = Str(attrVal).Trim()
+            if valStr <> ""
+                doc = m._stickyBucketAssignmentDocs[rule.fallbackAttribute + "||" + valStr]
+                if doc <> invalid and doc.assignments <> invalid
+                    if doc.assignments.DoesExist(currentKey)
+                        ' Only use fallback if we don't already have one from primary
+                        ' OR if we want to merge them but prefer primary for the same key
+                        for each k in doc.assignments
+                            if not assignments.DoesExist(k) then assignments[k] = doc.assignments[k]
+                        end for
+                        source = "fallback"
+                    end if
+                end if
+            end if
+        end if
+    end if
+    
+    if assignments.Count() = 0 then return result
+    
+    result.source = source
+    
+    ' Check for blocked versions (on the final merged assignments)
+    for v = 0 to minBucketVersion - 1
+        vKey = m._getStickyBucketExperimentKey(expKey, v)
+        if assignments.DoesExist(vKey)
+            result.versionIsBlocked = true
+            return result
+        end if
+    end for
+    
+    ' Look for current version assignment
+    if assignments.DoesExist(currentKey)
+        variationKey = assignments[currentKey]
+        found = false
+        if rule.meta <> invalid
+            for i = 0 to rule.meta.Count() - 1
+                if rule.meta[i].key = variationKey
+                    result.variation = i
+                    found = true
+                    exit for
+                end if
+            end for
+        end if
+        if not found then result.variation = Int(Val(variationKey))
+    end if
+    
+    return result
+end function
+
+' Save sticky bucket assignment to both in-memory cache and service
+' Saves under context.hashAttribute (the resolved attribute from _getHashContext)
+sub GrowthBook__saveStickyBucketAssignment(rule as object, context as object, variationIndex as integer, featureKey as string)
+    if m.stickyBucketService = invalid then return
+    if rule.disableStickyBucketing = true then return
+    
+    expKey = rule.key
+    if expKey = invalid or expKey = "" then expKey = featureKey
+    
+    bucketVersion = 0
+    if rule.bucketVersion <> invalid then bucketVersion = rule.bucketVersion
+    
+    assignmentKey = m._getStickyBucketExperimentKey(expKey, bucketVersion)
+    docKey = context.hashAttribute + "||" + context.hashValue
+    newValue = Str(variationIndex).Trim()
+    
+    ' Get existing doc from cache or start fresh
+    existing = m._stickyBucketAssignmentDocs[docKey]
+    assignments = {}
+    if existing <> invalid and existing.assignments <> invalid
+        for each k in existing.assignments
+            assignments[k] = existing.assignments[k]
+        end for
+    end if
+    
+    ' Skip save if assignment already matches
+    if assignments.DoesExist(assignmentKey) and assignments[assignmentKey] = newValue
+        return
+    end if
+    
+    ' Add/update the assignment
+    assignments[assignmentKey] = newValue
+    
+    ' Update in-memory cache
+    m._stickyBucketAssignmentDocs[docKey] = {
+        attributeName: context.hashAttribute,
+        attributeValue: context.hashValue,
+        assignments: assignments
+    }
+    
+    ' Persist to service
+    m.stickyBucketService.saveAssignments(context.hashAttribute, context.hashValue, assignments)
+end sub
+
+' ===================================================================
+' Sticky Bucket Services
+' ===================================================================
+
+' In-memory sticky bucket service (for testing/simple use)
+function GrowthBookInMemoryStickyBucketService() as object
+    return {
+        docs: {},
+        getAssignments: function(attrName as string, attrValue as string) as object
+            key = attrName + "||" + attrValue
+            return m.docs[key]
+        end function,
+        saveAssignments: sub(attrName as string, attrValue as string, assignments as object)
+            key = attrName + "||" + attrValue
+            m.docs[key] = {
+                attributeName: attrName,
+                attributeValue: attrValue,
+                assignments: assignments
+            }
+        end sub,
+        getAllAssignments: function() as object
+            return m.docs
+        end function
+    }
+end function
+
+' Registry-based persistent sticky bucket service (Roku OS 7.0+)
+function GrowthBookRegistryStickyBucketService() as object
+    return {
+        section: CreateObject("roRegistrySection", "GrowthBookStickyBuckets"),
+        getAssignments: function(attrName as string, attrValue as string) as object
+            key = attrName + "||" + attrValue
+            value = m.section.Read(key)
+            if value <> "" then return ParseJson(value)
+            return invalid
+        end function,
+        saveAssignments: sub(attrName as string, attrValue as string, assignments as object)
+            key = attrName + "||" + attrValue
+            doc = {
+                attributeName: attrName,
+                attributeValue: attrValue,
+                assignments: assignments
+            }
+            m.section.Write(key, FormatJson(doc))
+            m.section.Flush()
+        end sub,
+        getAllAssignments: function() as object
+            result = {}
+            keys = m.section.GetKeyList()
+            for each key in keys
+                value = m.section.Read(key)
+                if value <> "" then result[key] = ParseJson(value)
+            end for
+            return result
+        end function
+    }
 end function
