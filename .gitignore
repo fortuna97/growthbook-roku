@@ -32,5 +32,8 @@ out.zip
 *.zip
 *.pkg
 
+# Generated test entry point (created/deleted by run-native.js)
+tests/test-entry.brs
+
 # Test Channel (run locally with brs-desktop, not committed)
 test-channel/
