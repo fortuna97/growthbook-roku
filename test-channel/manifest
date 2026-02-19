@@ -1,0 +1,11 @@
+##   Channel Details
+title=GrowthBook SDK Test Channel
+major_version=2
+minor_version=0
+build_version=1
+
+##   Resolution
+ui_resolutions=hd
+
+##   Application Attributes
+supports_input_launch=1

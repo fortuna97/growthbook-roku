@@ -178,7 +178,7 @@ function GrowthBook(config as object) as object
     if instance.http <> invalid and type(instance.http) = "roURLTransfer"
         instance.http.SetCertificatesFile("common:/certs/ca-bundle.crt")
         instance.http.AddHeader("Content-Type", "application/json")
-        instance.http.AddHeader("User-Agent", "GrowthBook-Roku/2.0.0")
+        instance.http.AddHeader("User-Agent", "GrowthBook-Roku/2.0.1")
     end if
     
     return instance
@@ -1073,7 +1073,7 @@ function GrowthBook__evaluateConditions(condition as object) as boolean
                 end if
                 ' Use CreateObject("roRegex") for pattern matching
                 try
-                    regex = CreateObject("roRegex", pattern, "i")
+                    regex = CreateObject("roRegex", pattern, "")
                     if regex = invalid or not regex.IsMatch(value)
                         return false
                     end if
@@ -1643,7 +1643,7 @@ function GrowthBook__inNamespace(userId as string, namespace as object) as boole
         return true
     end if
     
-    n = m._gbhash(namespace[0], userId, 1)
+    n = m._gbhash("__" + namespace[0], userId, 1)
     if n = invalid then return false
     
     res = (n >= namespace[1] and n < namespace[2])

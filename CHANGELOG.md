@@ -2,6 +2,21 @@
 
 All notable changes to the GrowthBook Roku SDK.
 
+## [2.0.1] - 2026-02-18
+
+### Fixed
+- **Namespace hash seed** - `_inNamespace` now uses the required `"__"` prefix for the hash seed, matching the GrowthBook specification
+- **Regex case sensitivity** - `$regex` operator now defaults to case-sensitive matching, consistent with the reference SDK and MongoDB behavior
+- **Native test runner (Windows)** - Replaced `spawnSync` with `execSync` in `run-native.js` for reliable execution on Windows
+
+### Added
+- **brs-desktop test channel** - `test-channel/` for on-device SDK validation via [brs-desktop](https://github.com/lvcabral/brs-desktop), with runtime smoke tests and full `cases.json` spec coverage
+
+### Improved
+- **Documentation** - TESTING.md rewritten to reflect actual test infrastructure (JS validator + native BrightScript runner + brs-desktop test channel)
+
+---
+
 ## [2.0.0] - 2026-02-10
 
 ### Added
@@ -20,7 +35,6 @@ All notable changes to the GrowthBook Roku SDK.
 - **Refresh Features API** - On-demand feature updates via `refreshFeatures()`
 - **Fallback Attribute Support** - `fallbackAttribute` in hash context for sticky bucketing prerequisites
 - **Decrypt & Sticky Bucket Test Coverage** - Both test runners (BrightScript + JS validator) now cover all spec categories
-  - 327/327 spec tests passing (100%)
 
 ### Improved
 - **Platform Compatibility** - Cipher operations wrapped in try/catch for cross-platform resilience
