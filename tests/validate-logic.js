@@ -72,6 +72,9 @@ class GrowthBook {
         this._evaluationStack = [];
         this.stickyBucketService = config.stickyBucketService || null;
         this._stickyBucketAssignmentDocs = config.stickyBucketAssignmentDocs || {};
+        this.enabled = config.enabled !== undefined ? config.enabled : true;
+        this.qaMode = config.qaMode || false;
+        this.url = config.url || '';
     }
 
     // Evaluate conditions (mirrors your BrightScript implementation)
@@ -813,6 +816,146 @@ class GrowthBook {
         return result;
     }
 
+    // Direct experiment evaluation (mirrors the BrightScript `run` category tests)
+    run(experiment) {
+        const notIn = {
+            inExperiment: false,
+            variationId: 0,
+            value: experiment.variations ? experiment.variations[0] : null,
+            hashUsed: false
+        };
+
+        if (!experiment.variations || experiment.variations.length < 2) return notIn;
+        if (this.enabled === false) return notIn;
+
+        const expKey = experiment.key;
+
+        // URL query string override (takes effect even when active=false)
+        const urlOverride = this._getQueryStringOverride(expKey, experiment.variations.length);
+        if (urlOverride !== null) {
+            return { inExperiment: true, variationId: urlOverride, value: experiment.variations[urlOverride], hashUsed: false };
+        }
+
+        if (experiment.active === false) return notIn;
+
+        // forcedVariations (context-level)
+        if (this.forcedVariations && expKey in this.forcedVariations) {
+            const idx = this.forcedVariations[expKey];
+            if (idx >= 0 && idx < experiment.variations.length) {
+                return { inExperiment: true, variationId: idx, value: experiment.variations[idx], hashUsed: false };
+            }
+            return notIn;
+        }
+
+        // Hash attribute
+        const hashAttribute = experiment.hashAttribute || 'id';
+        let resolvedHashAttr = hashAttribute;
+        let hashValue = this._getAttributeValue(hashAttribute);
+        if ((hashValue === null || hashValue === '') && experiment.fallbackAttribute) {
+            const fbVal = this._getAttributeValue(experiment.fallbackAttribute);
+            if (fbVal !== null && fbVal !== '') {
+                hashValue = fbVal;
+                resolvedHashAttr = experiment.fallbackAttribute;
+            }
+        }
+        if (hashValue === null || hashValue === '') return notIn;
+        if (typeof hashValue !== 'string') hashValue = String(hashValue);
+
+        const seed = experiment.seed || expKey;
+        const hashVersion = experiment.hashVersion || 1;
+
+        // Sticky bucket
+        const stickyResult = this._getStickyBucketVariation(experiment, resolvedHashAttr, hashValue, expKey);
+        if (stickyResult.versionIsBlocked) return notIn;
+
+        let variationIndex = -1;
+        let stickyBucketUsed = false;
+
+        if (stickyResult.variation >= 0) {
+            variationIndex = stickyResult.variation;
+            stickyBucketUsed = true;
+        } else {
+            // Filters (when present, namespace is ignored)
+            if (experiment.filters) {
+                for (const filter of experiment.filters) {
+                    const filterAttr = filter.attribute || 'id';
+                    let filterVal = this._getAttributeValue(filterAttr);
+                    if (filterVal === null || filterVal === '') return notIn;
+                    if (typeof filterVal !== 'string') filterVal = String(filterVal);
+                    const n = this._gbhash(filter.seed || expKey, filterVal, filter.hashVersion || 2);
+                    if (n === null) return notIn;
+                    if (!filter.ranges.some(r => this._inRange(n, r))) return notIn;
+                }
+            } else {
+                // Namespace (only when no filters)
+                if (experiment.namespace) {
+                    const [nsId, nsStart, nsEnd] = experiment.namespace;
+                    const n = this._gbhash('__' + nsId, hashValue, 1);
+                    if (n === null || n < nsStart || n >= nsEnd) return notIn;
+                }
+            }
+
+            const n = this._gbhash(seed, hashValue, hashVersion);
+            if (n === null) return notIn;
+
+            const coverage = experiment.coverage !== undefined ? experiment.coverage : 1.0;
+            const ranges = experiment.ranges || this._getBucketRanges(experiment.variations.length, coverage, experiment.weights);
+            variationIndex = this._chooseVariation(n, ranges);
+
+            // Coverage is a hard gate — experiment.force cannot bypass it
+            if (variationIndex === -1) return notIn;
+        }
+
+        // experiment.force: applied after coverage gate, overrides qaMode
+        if (experiment.force !== undefined) {
+            const idx = experiment.force;
+            if (idx >= 0 && idx < experiment.variations.length) {
+                return { inExperiment: true, variationId: idx, value: experiment.variations[idx], hashUsed: false };
+            }
+            return notIn;
+        }
+
+        if (this.qaMode) return notIn;
+
+        if (experiment.condition && !this._evaluateConditions(experiment.condition)) return notIn;
+
+        if (experiment.parentConditions) {
+            for (const parent of experiment.parentConditions) {
+                const parentResult = this.evalFeature(parent.id);
+                if (parentResult.source === 'cyclicPrerequisite') return notIn;
+                if (parent.gate && !parentResult.on) return notIn;
+                if (parent.condition) {
+                    const tempGb = new GrowthBook({ attributes: { value: parentResult.value }, savedGroups: this.savedGroups });
+                    if (!tempGb._evaluateConditions(parent.condition)) return notIn;
+                }
+            }
+        }
+
+        this._saveStickyBucketAssignment(experiment, resolvedHashAttr, hashValue, variationIndex, expKey);
+
+        return {
+            inExperiment: true,
+            variationId: variationIndex,
+            value: experiment.variations[variationIndex],
+            hashUsed: !stickyBucketUsed,
+            stickyBucketUsed
+        };
+    }
+
+    _getQueryStringOverride(key, numVariations) {
+        if (!this.url) return null;
+        try {
+            const urlObj = new URL(this.url);
+            const val = urlObj.searchParams.get(key);
+            if (val === null) return null;
+            const n = parseInt(val, 10);
+            if (isNaN(n) || n < 0 || n >= numVariations) return null;
+            return n;
+        } catch (e) {
+            return null;
+        }
+    }
+
     _saveStickyBucketAssignment(rule, resolvedHashAttr, hashValue, variationIndex, featureKey) {
         if (!this.stickyBucketService) return;
         if (rule.disableStickyBucketing) return;
@@ -976,6 +1119,35 @@ function runTests(category, tests) {
                     process.stdout.write('✗');
                     failures.push({ name, expected: expected === null ? 'null' : expected, actual: result === null ? 'null' : result });
                 }
+            } else if (category === 'run') {
+                // [name, context, experiment, expectedValue, expectedInExperiment, expectedHashUsed]
+                const [context, experiment, expectedValue, expectedInExperiment] = rest;
+                const gb = new GrowthBook({
+                    attributes: context.attributes,
+                    features: context.features,
+                    savedGroups: context.savedGroups,
+                    forcedVariations: context.forcedVariations,
+                    qaMode: context.qaMode,
+                    enabled: context.enabled,
+                    url: context.url
+                });
+                result = gb.run(experiment);
+
+                const match = gb._deepEqual(result.value, expectedValue) &&
+                              result.inExperiment === expectedInExperiment;
+
+                if (match) {
+                    passed++;
+                    process.stdout.write('✓');
+                } else {
+                    failed++;
+                    process.stdout.write('✗');
+                    failures.push({
+                        name,
+                        expected: JSON.stringify({ value: expectedValue, inExperiment: expectedInExperiment }),
+                        actual: JSON.stringify({ value: result.value, inExperiment: result.inExperiment })
+                    });
+                }
             } else if (category === 'stickyBucket') {
                 // stickyBucket tests: [name, context, initialDocs, featureKey, expectedResult, expectedAssignmentDocs]
                 const [context, initialDocs, featureKey, expectedResult, expectedAssignmentDocs] = rest;
@@ -1103,7 +1275,7 @@ function runTests(category, tests) {
 // ================================================================
 
 const results = {};
-const categories = ['evalCondition', 'hash', 'getBucketRange', 'chooseVariation', 'feature', 'decrypt', 'stickyBucket'];
+const categories = ['evalCondition', 'hash', 'getBucketRange', 'chooseVariation', 'feature', 'run', 'decrypt', 'stickyBucket'];
 
 for (const category of categories) {
     if (cases[category]) {

@@ -10,6 +10,7 @@ All notable changes to the GrowthBook Roku SDK.
 - **Native test runner (Windows)** - Replaced `spawnSync` with `execSync` in `run-native.js` for reliable execution on Windows
 
 ### Added
+- **JS validator `run` category** - Added `run` experiment test coverage to `validate-logic.js`, bringing JS validator to 400/400 tests passing (100%)
 - **brs-desktop test channel** - `test-channel/` for on-device SDK validation via [brs-desktop](https://github.com/lvcabral/brs-desktop), with runtime smoke tests and full `cases.json` spec coverage
 
 ### Improved
@@ -35,6 +36,8 @@ All notable changes to the GrowthBook Roku SDK.
 - **Refresh Features API** - On-demand feature updates via `refreshFeatures()`
 - **Fallback Attribute Support** - `fallbackAttribute` in hash context for sticky bucketing prerequisites
 - **Decrypt & Sticky Bucket Test Coverage** - Both test runners (BrightScript + JS validator) now cover all spec categories
+  - 401/401 native BrightScript tests passing (100%)
+  - 327/327 JS validator tests passing (100%)
 
 ### Improved
 - **Platform Compatibility** - Cipher operations wrapped in try/catch for cross-platform resilience

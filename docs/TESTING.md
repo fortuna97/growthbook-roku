@@ -6,7 +6,7 @@ The GrowthBook Roku SDK has three layers of testing:
 
 | Layer | Command | Tests | Runtime |
 |-------|---------|-------|---------|
-| **JS Validator** | `npm run test:validator` | 327 | Node.js |
+| **JS Validator** | `npm run test:validator` | 400 | Node.js |
 | **Native BrightScript** | `npm run test:native` | 401 | brs-engine |
 | **On-Device (brs-desktop)** | `npm run test:channel` | 401+ smoke tests | brs-desktop |
 
@@ -36,10 +36,11 @@ hash:             15/15  (100%)
 getBucketRange:   13/13  (100%)
 chooseVariation:  13/13  (100%)
 feature:          46/46  (100%)
+run:              73/73  (100%)
 decrypt:          10/10  (100%)
 stickyBucket:     9/9    (100%)
 ──────────────────────────────────
-TOTAL: 327/327 tests passed (100%)
+TOTAL: 400/400 tests passed (100%)
 ```
 
 ### When to Use

@@ -793,7 +793,7 @@ See the `examples/` directory for complete working examples:
 npm test
 ```
 
-This runs both the JS validator (327 spec tests) and native BrightScript runner (401 tests) in sequence.
+This runs both the JS validator (400 spec tests) and native BrightScript runner (401 tests) in sequence.
 
 ### Individual Test Commands
 
