@@ -28,7 +28,7 @@ Reimplements SDK logic in JavaScript and runs it against the official `cases.jso
 
 **File:** `tests/validate-logic.js`
 
-### Current Results (v2.0.1)
+### Current Results (v1.4.1)
 
 ```
 evalCondition:    221/221 (100%)
@@ -62,7 +62,7 @@ Runs the **actual `GrowthBook.brs`** source code through `brs-engine` (a BrightS
 - `tests/TestUtilities.brs` — Helper functions (JSON comparison, type conversion)
 - `tests/cases.json` — Official GrowthBook spec test suite
 
-### Current Results (v2.0.1)
+### Current Results (v1.4.1)
 
 ```
 Spec categories tested:

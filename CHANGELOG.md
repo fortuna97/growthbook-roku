@@ -2,7 +2,7 @@
 
 All notable changes to the GrowthBook Roku SDK.
 
-## [2.0.1] - 2026-02-18
+## [1.4.1] - 2026-02-18
 
 ### Fixed
 - **Namespace hash seed** - `_inNamespace` now uses the required `"__"` prefix for the hash seed, matching the GrowthBook specification
@@ -17,7 +17,7 @@ All notable changes to the GrowthBook Roku SDK.
 
 ---
 
-## [2.0.0] - 2026-02-10
+## [1.4.0] - 2026-02-10
 
 ### Added
 - **Encrypted Features** - AES-128-CBC decryption for encrypted feature payloads (`roEVPCipher`, Roku OS 9.2+)
@@ -122,7 +122,7 @@ All notable changes to the GrowthBook Roku SDK.
 ### Added
 - Version comparison operators for semantic version targeting
   - `$veq`, `$vne`, `$vgt`, `$vgte`, `$vlt`, `$vlte`
-  - Supports semantic versioning (e.g., "2.0.0"), pre-release versions (e.g., "1.0.0-beta")
+  - Supports semantic versioning (e.g., "1.4.0"), pre-release versions (e.g., "1.0.0-beta")
   - Handles version prefixes and build metadata
 
 ### Fixed

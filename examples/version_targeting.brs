@@ -13,11 +13,11 @@ function Main()
             appVersion: "2.1.0"
         },
         features: {
-            ' New feature for v2.0.0+
+            ' New feature for v1.4.0+
             "new-search-ui": {
                 defaultValue: false,
                 rules: [{
-                    condition: { appVersion: { "$vgte": "2.0.0" } },
+                    condition: { appVersion: { "$vgte": "1.4.0" } },
                     force: true
                 }]
             },
@@ -35,7 +35,7 @@ function Main()
             "show-update-banner": {
                 defaultValue: false,
                 rules: [{
-                    condition: { appVersion: { "$vlt": "2.0.0" } },
+                    condition: { appVersion: { "$vlt": "1.4.0" } },
                     force: true
                 }]
             }
@@ -48,7 +48,7 @@ function Main()
     
     ' Check version-targeted features
     if gb.isOn("new-search-ui")
-        print "✓ New Search UI enabled (v2.0.0+)"
+        print "✓ New Search UI enabled (v1.4.0+)"
         ShowNewSearch()
     else
         print "Using legacy search"
@@ -62,7 +62,7 @@ function Main()
     end if
     
     if gb.isOn("show-update-banner")
-        print "⚠ Update banner shown (< v2.0.0)"
+        print "⚠ Update banner shown (< v1.4.0)"
     else
         print "No update needed"
     end if

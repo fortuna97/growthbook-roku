@@ -1,6 +1,6 @@
 {
   "name": "growthbook-roku",
-  "version": "2.0.1",
+  "version": "1.4.1",
   "description": "Official GrowthBook SDK for Roku/BrightScript applications",
   "main": "source/GrowthBook.brs",
   "scripts": {

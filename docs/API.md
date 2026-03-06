@@ -1,6 +1,6 @@
 # GrowthBook Roku SDK - API Reference
 
-Complete API documentation for the GrowthBook Roku SDK v2.0.1.
+Complete API documentation for the GrowthBook Roku SDK v1.4.1.
 
 ## Table of Contents
 
@@ -208,7 +208,7 @@ gb.setAttributes({
 
 ### `refreshFeatures() as boolean`
 
-**New in v2.0.0** - Re-fetch features from the GrowthBook API.
+**New in v1.4.0** - Re-fetch features from the GrowthBook API.
 
 **Parameters:** None
 
@@ -234,7 +234,7 @@ end if
 
 ### `registerTrackingPlugin(plugin as object) as void`
 
-**New in v2.0.0** - Register a tracking plugin to receive experiment and feature usage events.
+**New in v1.4.0** - Register a tracking plugin to receive experiment and feature usage events.
 
 **Parameters:**
 - `plugin` (object) - A tracking plugin instance (must have `onExperimentViewed` and/or `onFeatureUsage` methods)
@@ -260,7 +260,7 @@ gb.registerTrackingPlugin(plugin)
 
 ## Sticky Bucket Services
 
-**New in v2.0.0** - Sticky bucketing persists experiment variation assignments so that users always see the same variation, even across sessions or after attribute changes (e.g., anonymous to logged-in transition).
+**New in v1.4.0** - Sticky bucketing persists experiment variation assignments so that users always see the same variation, even across sessions or after attribute changes (e.g., anonymous to logged-in transition).
 
 ### `GrowthBookInMemoryStickyBucketService()`
 
@@ -314,7 +314,7 @@ Both services implement the same interface:
 
 ## Tracking Plugins
 
-**New in v2.0.0** - Tracking plugins provide an extensible way to capture experiment exposure and feature usage events.
+**New in v1.4.0** - Tracking plugins provide an extensible way to capture experiment exposure and feature usage events.
 
 ### `GrowthBookTrackingPlugin(config)`
 
@@ -470,7 +470,7 @@ end sub
 
 **Default:** `invalid`
 
-**New in v2.0.0** - A sticky bucket service instance for persisting experiment assignments.
+**New in v1.4.0** - A sticky bucket service instance for persisting experiment assignments.
 
 ```brightscript
 ' In-memory (testing/single session)
@@ -547,25 +547,25 @@ GrowthBook supports powerful targeting rules to show features to specific user s
 
 | Operator | Meaning | Example |
 |----------|---------|---------|
-| `$veq` | Version equals | `{ "appVersion": { "$veq": "2.0.0" } }` |
+| `$veq` | Version equals | `{ "appVersion": { "$veq": "1.4.0" } }` |
 | `$vne` | Version not equals | `{ "appVersion": { "$vne": "1.0.0" } }` |
 | `$vgt` | Version greater than | `{ "appVersion": { "$vgt": "1.9.0" } }` |
-| `$vgte` | Version greater/equal | `{ "appVersion": { "$vgte": "2.0.0" } }` |
+| `$vgte` | Version greater/equal | `{ "appVersion": { "$vgte": "1.4.0" } }` |
 | `$vlt` | Version less than | `{ "appVersion": { "$vlt": "3.0.0" } }` |
 | `$vlte` | Version less/equal | `{ "appVersion": { "$vlte": "2.9.9" } }` |
 
 **Examples:**
 
 ```javascript
-// Roll out to users on v2.0.0 or newer
+// Roll out to users on v1.4.0 or newer
 {
-  "appVersion": { "$vgte": "2.0.0" }
+  "appVersion": { "$vgte": "1.4.0" }
 }
 
 // Version range
 {
   "$and": [
-    { "appVersion": { "$vgte": "2.0.0" } },
+    { "appVersion": { "$vgte": "1.4.0" } },
     { "appVersion": { "$vlt": "3.0.0" } }
   ]
 }

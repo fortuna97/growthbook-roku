@@ -178,7 +178,7 @@ function GrowthBook(config as object) as object
     if instance.http <> invalid and type(instance.http) = "roURLTransfer"
         instance.http.SetCertificatesFile("common:/certs/ca-bundle.crt")
         instance.http.AddHeader("Content-Type", "application/json")
-        instance.http.AddHeader("User-Agent", "GrowthBook-Roku/2.0.1")
+        instance.http.AddHeader("User-Agent", "GrowthBook-Roku/1.4.1")
     end if
     
     return instance
@@ -1325,7 +1325,7 @@ end function
 
 ' ===================================================================
 ' Version string padding for semantic version comparison
-' Enables comparisons like "2.0.0" > "1.9.9" and "1.0.0" > "1.0.0-beta"
+' Enables comparisons like "1.4.0" > "1.3.9" and "1.0.0" > "1.0.0-beta"
 ' ===================================================================
 function GrowthBook__paddedVersionString(input as dynamic) as string
     ' Convert to string if number
