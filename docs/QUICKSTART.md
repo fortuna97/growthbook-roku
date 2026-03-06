@@ -138,11 +138,11 @@ SetRequestTimeout(timeout)
 ### Version Targeting
 
 **In GrowthBook Dashboard:**
-- Rule: `appVersion >= "2.0.0"`
+- Rule: `appVersion >= "1.4.0"`
 
 **In Your Code:**
 ```brightscript
-' Automatically shown only to users on v2.0.0+
+' Automatically shown only to users on v1.4.0+
 if m.global.gb.isOn("new-search")
     ShowNewSearch()
 end if

@@ -1,6 +1,6 @@
 # GrowthBook Roku SDK - Integration Guide
 
-**Version:** 2.0.1  
+**Version:** 1.4.1  
 **Last Updated:** February 2026  
 **Target:** Production deployment
 
@@ -259,9 +259,9 @@ end sub
 
 ```brightscript
 ' In GrowthBook Dashboard, set targeting rule:
-' appVersion >= "2.0.0"
+' appVersion >= "1.4.0"
 
-' Users on v2.0.0+ see new feature automatically
+' Users on v1.4.0+ see new feature automatically
 if m.global.gb.isOn("new-search-feature")
     ShowNewSearch()
 else
@@ -278,7 +278,7 @@ end if
 - `$vne`: Not equals
 
 **Examples:**
-- Show feature only to v2.0.0+: `{ "appVersion": { "$vgte": "2.0.0" } }`
+- Show feature only to v1.4.0+: `{ "appVersion": { "$vgte": "1.4.0" } }`
 - Hide from old versions: `{ "appVersion": { "$vgt": "1.5.0" } }`
 - Target specific version: `{ "appVersion": { "$veq": "2.1.0" } }`
 
@@ -322,7 +322,7 @@ end sub
 
 ---
 
-## Encrypted Features (v2.0.0)
+## Encrypted Features (v1.4.0)
 
 If your GrowthBook project uses encrypted feature payloads, configure the SDK with your decryption key. The SDK automatically decrypts AES-128-CBC encrypted payloads.
 
@@ -361,7 +361,7 @@ gb = GrowthBook({
 
 ---
 
-## Sticky Bucketing (v2.0.0)
+## Sticky Bucketing (v1.4.0)
 
 Sticky bucketing ensures users always see the same experiment variation, even when:
 - User attributes change (e.g., anonymous to logged-in)
@@ -421,7 +421,7 @@ The experiment's `fallbackAttribute` (configured in GrowthBook dashboard) tells 
 
 ---
 
-## Tracking Plugins (v2.0.0)
+## Tracking Plugins (v1.4.0)
 
 Tracking plugins provide a structured way to send experiment exposure and feature usage events to your analytics platform.
 
@@ -468,7 +468,7 @@ gb.registerTrackingPlugin(myPlugin)
 
 ---
 
-## Refreshing Features (v2.0.0)
+## Refreshing Features (v1.4.0)
 
 For long-running Roku apps, you can refresh features on demand:
 
@@ -607,7 +607,7 @@ sub TestTargeting()
         attributes: {
             id: "test-user",
             premium: true,
-            appVersion: "2.0.0"
+            appVersion: "1.4.0"
         },
         features: {
             "premium-only": {
@@ -703,7 +703,7 @@ end if
 
 **Solutions:**
 1. Verify `appVersion` attribute is set correctly
-2. Check version format: use semantic versioning ("2.0.0", not "2.0" or "v2.0.0")
+2. Check version format: use semantic versioning ("1.4.0", not "1.4" or "v1.4.0")
 3. Test version comparison in GrowthBook dashboard preview
 4. Use version operators: `$vgt`, `$vgte`, `$vlt`, `$vlte`, `$veq`, `$vne`
 
